@@ -21,6 +21,8 @@ pub enum Mode {
     NewSession { name: String, path: String, field: NewSessionField },
     /// Renaming a session
     Rename { old_name: String, new_name: String },
+    /// Entering commit message
+    Commit { message: String },
     /// Showing help
     Help,
 }
@@ -32,6 +34,10 @@ pub enum SessionAction {
     SwitchTo,
     /// Rename this session
     Rename,
+    /// Stage all changes
+    Stage,
+    /// Commit staged changes
+    Commit,
     /// Push commits to remote
     Push,
     /// Push and set upstream branch
@@ -50,6 +56,8 @@ impl SessionAction {
         match self {
             Self::SwitchTo => "Switch to session",
             Self::Rename => "Rename session",
+            Self::Stage => "Stage all changes",
+            Self::Commit => "Commit staged changes",
             Self::Push => "Push to remote",
             Self::PushSetUpstream => "Push and set upstream",
             Self::Pull => "Pull from remote",
@@ -148,9 +156,16 @@ impl App {
         self.message = None;
     }
 
-    /// Refresh the session list
+    /// Refresh the session list (shows "Refreshed" message)
     pub fn refresh(&mut self) {
         self.clear_messages();
+        if self.refresh_sessions() {
+            self.message = Some("Refreshed".to_string());
+        }
+    }
+
+    /// Refresh sessions without affecting messages (for use after git operations)
+    fn refresh_sessions(&mut self) -> bool {
         match Tmux::list_sessions() {
             Ok(sessions) => {
                 self.sessions = sessions;
@@ -159,10 +174,11 @@ impl App {
                     self.selected = self.sessions.len() - 1;
                 }
                 self.update_preview();
-                self.message = Some("Refreshed".to_string());
+                true
             }
             Err(e) => {
                 self.error = Some(format!("Failed to refresh: {}", e));
+                false
             }
         }
     }
@@ -240,6 +256,30 @@ impl App {
         self.mode = Mode::Normal;
     }
 
+    /// Confirm and execute the commit
+    pub fn confirm_commit(&mut self) {
+        if let Mode::Commit { ref message } = self.mode {
+            if message.trim().is_empty() {
+                self.error = Some("Commit message cannot be empty".to_string());
+                self.mode = Mode::Normal;
+                return;
+            }
+
+            if let Some(session) = self.selected_session() {
+                let path = session.working_directory.clone();
+                let msg = message.clone();
+                match GitContext::commit(&path, &msg) {
+                    Ok(_) => {
+                        self.refresh_sessions();
+                        self.message = Some("Committed changes".to_string());
+                    }
+                    Err(e) => self.error = Some(format!("Commit failed: {}", e)),
+                }
+            }
+        }
+        self.mode = Mode::Normal;
+    }
+
     /// Execute an action on the selected session
     fn execute_action(&mut self, action: SessionAction) {
         let Some(session) = self.selected_session() else {
@@ -263,12 +303,29 @@ impl App {
                     new_name: session_name,
                 };
             }
+            SessionAction::Stage => {
+                let path = session.working_directory.clone();
+                match GitContext::stage_all(&path) {
+                    Ok(_) => {
+                        self.refresh_sessions();
+                        self.message = Some("Staged all changes".to_string());
+                    }
+                    Err(e) => self.error = Some(format!("Stage failed: {}", e)),
+                }
+                self.mode = Mode::Normal;
+            }
+            SessionAction::Commit => {
+                // Enter commit mode (don't set Normal)
+                self.mode = Mode::Commit {
+                    message: String::new(),
+                };
+            }
             SessionAction::Push => {
                 let path = session.working_directory.clone();
                 match GitContext::push(&path) {
                     Ok(_) => {
+                        self.refresh_sessions();
                         self.message = Some("Pushed to remote".to_string());
-                        self.refresh();
                     }
                     Err(e) => self.error = Some(format!("Push failed: {}", e)),
                 }
@@ -278,8 +335,8 @@ impl App {
                 let path = session.working_directory.clone();
                 match GitContext::push_set_upstream(&path) {
                     Ok(_) => {
+                        self.refresh_sessions();
                         self.message = Some("Pushed and set upstream".to_string());
-                        self.refresh();
                     }
                     Err(e) => self.error = Some(format!("Push failed: {}", e)),
                 }
@@ -289,8 +346,8 @@ impl App {
                 let path = session.working_directory.clone();
                 match GitContext::pull(&path) {
                     Ok(_) => {
+                        self.refresh_sessions();
                         self.message = Some("Pulled from remote".to_string());
-                        self.refresh();
                     }
                     Err(e) => self.error = Some(format!("Pull failed: {}", e)),
                 }
@@ -299,8 +356,8 @@ impl App {
             SessionAction::Kill => {
                 match Tmux::kill_session(&session_name) {
                     Ok(_) => {
+                        self.refresh_sessions();
                         self.message = Some(format!("Killed session '{}'", session_name));
-                        self.refresh();
                     }
                     Err(e) => self.error = Some(format!("Failed to kill: {}", e)),
                 }
@@ -310,8 +367,8 @@ impl App {
                 // For now, just kill the session (worktree deletion is Stage 3)
                 match Tmux::kill_session(&session_name) {
                     Ok(_) => {
+                        self.refresh_sessions();
                         self.message = Some(format!("Killed session '{}' (worktree deletion not yet implemented)", session_name));
-                        self.refresh();
                     }
                     Err(e) => self.error = Some(format!("Failed to kill: {}", e)),
                 }
@@ -348,8 +405,8 @@ impl App {
 
             match Tmux::rename_session(&old, &new) {
                 Ok(_) => {
+                    self.refresh_sessions();
                     self.message = Some(format!("Renamed '{}' to '{}'", old, new));
-                    self.refresh();
                 }
                 Err(e) => {
                     self.error = Some(format!("Failed to rename: {}", e));
@@ -391,8 +448,8 @@ impl App {
 
             match Tmux::new_session(&session_name, &session_path, start_claude) {
                 Ok(_) => {
+                    self.refresh_sessions();
                     self.message = Some(format!("Created session '{}'", session_name));
-                    self.refresh();
                 }
                 Err(e) => {
                     self.error = Some(format!("Failed to create session: {}", e));
@@ -446,16 +503,25 @@ impl App {
 
         // Add git actions if applicable
         if let Some(ref git) = session.git_context {
+            // Stage: if there are unstaged changes
+            if git.has_unstaged {
+                actions.push(SessionAction::Stage);
+            }
+            // Commit: if there are staged changes
+            if git.has_staged {
+                actions.push(SessionAction::Commit);
+            }
+
             if git.has_upstream {
                 // Push: ahead > 0 and clean
-                if git.ahead > 0 && !git.is_dirty {
+                if git.ahead > 0 && !git.is_dirty() {
                     actions.push(SessionAction::Push);
                 }
                 // Pull: behind > 0 and clean
-                if git.behind > 0 && !git.is_dirty {
+                if git.behind > 0 && !git.is_dirty() {
                     actions.push(SessionAction::Pull);
                 }
-            } else if git.has_remote && !git.is_dirty {
+            } else if git.has_remote && !git.is_dirty() {
                 // No upstream but remote exists - offer to push and set upstream
                 actions.push(SessionAction::PushSetUpstream);
             }

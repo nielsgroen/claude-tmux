@@ -11,8 +11,10 @@ use git2::{
 pub struct GitContext {
     /// Current branch name (or short commit hash if detached)
     pub branch: String,
-    /// Whether the working directory has uncommitted changes
-    pub is_dirty: bool,
+    /// Whether there are staged changes ready to commit
+    pub has_staged: bool,
+    /// Whether there are unstaged changes in the working directory
+    pub has_unstaged: bool,
     /// Whether this directory is a worktree (not the main checkout)
     pub is_worktree: bool,
     /// Path to the main repository (if this is a worktree)
@@ -25,6 +27,13 @@ pub struct GitContext {
     pub ahead: usize,
     /// Commits behind upstream
     pub behind: usize,
+}
+
+impl GitContext {
+    /// Returns true if there are any uncommitted changes (staged or unstaged)
+    pub fn is_dirty(&self) -> bool {
+        self.has_staged || self.has_unstaged
+    }
 }
 
 impl GitContext {
@@ -52,17 +61,44 @@ impl GitContext {
             Err(_) => "HEAD".to_string(), // Empty repo or other edge case
         };
 
-        // Check dirty state with explicit options to match `git status` behavior
+        // Check staged/unstaged state
         let mut status_opts = StatusOptions::new();
         status_opts
             .include_untracked(true)
             .include_ignored(false)
             .exclude_submodules(true);
 
-        let is_dirty = repo
+        let (has_staged, has_unstaged) = repo
             .statuses(Some(&mut status_opts))
-            .map(|statuses| !statuses.is_empty())
-            .unwrap_or(false);
+            .map(|statuses| {
+                let mut staged = false;
+                let mut unstaged = false;
+                for entry in statuses.iter() {
+                    let s = entry.status();
+                    // Index (staged) changes
+                    if s.intersects(
+                        git2::Status::INDEX_NEW
+                            | git2::Status::INDEX_MODIFIED
+                            | git2::Status::INDEX_DELETED
+                            | git2::Status::INDEX_RENAMED
+                            | git2::Status::INDEX_TYPECHANGE,
+                    ) {
+                        staged = true;
+                    }
+                    // Worktree (unstaged) changes
+                    if s.intersects(
+                        git2::Status::WT_NEW
+                            | git2::Status::WT_MODIFIED
+                            | git2::Status::WT_DELETED
+                            | git2::Status::WT_RENAMED
+                            | git2::Status::WT_TYPECHANGE,
+                    ) {
+                        unstaged = true;
+                    }
+                }
+                (staged, unstaged)
+            })
+            .unwrap_or((false, false));
 
         // Check if worktree
         let is_worktree = repo.is_worktree();
@@ -80,7 +116,8 @@ impl GitContext {
 
         Some(GitContext {
             branch,
-            is_dirty,
+            has_staged,
+            has_unstaged,
             is_worktree,
             main_repo_path,
             has_upstream,
@@ -131,6 +168,56 @@ impl GitContext {
             Ok((ahead, behind)) => (true, ahead, behind),
             Err(_) => (true, 0, 0),
         }
+    }
+
+    /// Stage all changes (like git add -A)
+    pub fn stage_all(path: &Path) -> Result<()> {
+        let repo = Repository::discover(path).context("Failed to open repository")?;
+
+        let mut index = repo.index().context("Failed to get index")?;
+
+        index
+            .add_all(["*"].iter(), git2::IndexAddOption::DEFAULT, None)
+            .context("Failed to stage files")?;
+
+        // Also remove deleted files from index
+        index
+            .update_all(["*"].iter(), None)
+            .context("Failed to update index")?;
+
+        index.write().context("Failed to write index")?;
+
+        Ok(())
+    }
+
+    /// Commit staged changes with a message
+    pub fn commit(path: &Path, message: &str) -> Result<()> {
+        let repo = Repository::discover(path).context("Failed to open repository")?;
+
+        let mut index = repo.index().context("Failed to get index")?;
+        let tree_oid = index.write_tree().context("Failed to write tree")?;
+        let tree = repo.find_tree(tree_oid).context("Failed to find tree")?;
+
+        let signature = repo.signature().context("Failed to get signature")?;
+
+        let parent_commit = match repo.head() {
+            Ok(head) => Some(head.peel_to_commit().context("Failed to get HEAD commit")?),
+            Err(_) => None, // Initial commit
+        };
+
+        let parents: Vec<&git2::Commit> = parent_commit.iter().collect();
+
+        repo.commit(
+            Some("HEAD"),
+            &signature,
+            &signature,
+            message,
+            &tree,
+            &parents,
+        )
+        .context("Failed to create commit")?;
+
+        Ok(())
     }
 
     /// Push and set upstream (like git push -u origin branch)

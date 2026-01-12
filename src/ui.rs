@@ -46,6 +46,9 @@ pub fn render(frame: &mut Frame, app: &App) {
         Mode::Rename { old_name, new_name } => {
             render_rename_dialog(frame, old_name, new_name);
         }
+        Mode::Commit { message } => {
+            render_commit_dialog(frame, message);
+        }
         Mode::Filter { input } => {
             render_filter_bar(frame, input, layout[3]);
         }
@@ -150,8 +153,25 @@ fn render_session_list(frame: &mut Frame, app: &App, area: Rect) {
             } else {
                 Color::Cyan
             };
-            let dirty_span = if git.is_dirty {
-                vec![Span::styled(" *", Style::default().fg(Color::Yellow))]
+
+            // Show status indicators: + for staged, * for unstaged, ? for untracked
+            let mut status_str = String::new();
+            if git.has_staged {
+                status_str.push('+');
+            }
+            if git.has_unstaged {
+                status_str.push('*');
+            }
+            // if git.has_untracked {
+            //     status_str.push('?');
+            // }
+            let status_spans = if !status_str.is_empty() {
+                let color = if git.has_staged && !git.has_unstaged {
+                    Color::Green // Only staged = green
+                } else {
+                    Color::Yellow // Mixed state = yellow
+                };
+                vec![Span::styled(format!(" {}", status_str), Style::default().fg(color))]
             } else {
                 vec![]
             };
@@ -162,7 +182,7 @@ fn render_session_list(frame: &mut Frame, app: &App, area: Rect) {
                 Span::styled(&git.branch, Style::default().fg(Color::Cyan)),
                 Span::styled(close, Style::default().fg(bracket_color)),
             ];
-            spans.extend(dirty_span);
+            spans.extend(status_spans);
             spans
         } else {
             vec![]
@@ -248,9 +268,16 @@ fn render_session_list(frame: &mut Frame, app: &App, area: Rect) {
                     }
                 }
 
-                if git.is_dirty {
+                // Show staged/unstaged status
+                if git.has_staged {
                     git_spans.push(Span::raw("  "));
-                    git_spans.push(Span::styled("dirty: ", label_style));
+                    git_spans.push(Span::styled("staged: ", label_style));
+                    git_spans.push(Span::styled("yes", Style::default().fg(Color::Green)));
+                }
+
+                if git.has_unstaged {
+                    git_spans.push(Span::raw("  "));
+                    git_spans.push(Span::styled("unstaged: ", label_style));
                     git_spans.push(Span::styled("yes", Style::default().fg(Color::Yellow)));
                 }
 
@@ -398,6 +425,7 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
         Mode::ConfirmAction => "  y/⏎ confirm  n/esc cancel",
         Mode::NewSession { .. } => "  ⏎ create  tab switch field  esc cancel",
         Mode::Rename { .. } => "  ⏎ confirm  esc cancel",
+        Mode::Commit { .. } => "  ⏎ commit  esc cancel",
         Mode::Help => "  q close",
     };
 
@@ -485,6 +513,35 @@ fn render_new_session_dialog(frame: &mut Frame, name: &str, path: &str, field: N
         Line::raw(""),
         Line::styled(
             "Press Enter to create, Tab to switch fields",
+            Style::default().fg(Color::DarkGray),
+        ),
+    ]);
+
+    let paragraph = Paragraph::new(text)
+        .block(block)
+        .wrap(Wrap { trim: true });
+
+    frame.render_widget(Clear, area);
+    frame.render_widget(paragraph, area);
+}
+
+fn render_commit_dialog(frame: &mut Frame, message: &str) {
+    let area = centered_rect(60, 6, frame.area());
+
+    let block = Block::default()
+        .title(" Commit ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan));
+
+    let text = Text::from(vec![
+        Line::from(vec![
+            Span::raw("Message: "),
+            Span::styled(message, Style::default().fg(Color::Yellow)),
+            Span::raw("_"),
+        ]),
+        Line::raw(""),
+        Line::styled(
+            "Press Enter to commit",
             Style::default().fg(Color::DarkGray),
         ),
     ]);

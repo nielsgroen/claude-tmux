@@ -14,6 +14,7 @@ pub fn handle_key(app: &mut App, key: KeyEvent) {
         Mode::ConfirmAction => handle_confirm_action_mode(app, key),
         Mode::NewSession { .. } => handle_new_session_mode(app, key),
         Mode::Rename { .. } => handle_rename_mode(app, key),
+        Mode::Commit { .. } => handle_commit_mode(app, key),
         Mode::Help => handle_help_mode(app, key),
     }
 }
@@ -222,6 +223,28 @@ fn handle_rename_mode(app: &mut App, key: KeyEvent) {
                 if c.is_alphanumeric() || c == '-' || c == '_' {
                     new_name.push(c);
                 }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn handle_commit_mode(app: &mut App, key: KeyEvent) {
+    match key.code {
+        KeyCode::Esc => {
+            app.cancel();
+        }
+        KeyCode::Enter => {
+            app.confirm_commit();
+        }
+        KeyCode::Backspace => {
+            if let Mode::Commit { ref mut message } = app.mode {
+                message.pop();
+            }
+        }
+        KeyCode::Char(c) => {
+            if let Mode::Commit { ref mut message } = app.mode {
+                message.push(c);
             }
         }
         _ => {}
