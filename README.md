@@ -2,26 +2,6 @@
 
 A terminal user interface for managing multiple Claude Code sessions within tmux. CCM provides a centralized view of all your Claude Code instances, enabling quick switching, status monitoring, and session lifecycle management.
 
-## Features
-
-- **Session Overview** — See all tmux sessions at a glance with Claude Code status indicators
-- **Status Detection** — Know whether each Claude Code instance is idle, working, or waiting for input
-- **Quick Switching** — Jump to any session with minimal keystrokes
-- **Live Preview** — See the last 15 lines of the selected session's Claude Code pane with full ANSI color support
-- **Session Management** — Create, kill, and rename sessions without leaving the TUI
-- **Expandable Details** — View metadata like window count, pane commands, uptime, and attachment status
-- **Fuzzy Filtering** — Quickly filter sessions by name or path
-
-## Screenshot
-
-<img src="docs/images/screenshot.png" alt="CCM Screenshot" width="600">
-
-**Status indicators:**
-- `●` — Working: Claude is actively processing
-- `○` — Idle: Ready for input
-- `◐` — Waiting for input: Permission prompt (`[y/n]`)
-- `?` — Unknown: Not a Claude Code session or status unclear
-
 ## Installation
 
 ### Build from source
@@ -45,6 +25,26 @@ Options:
 - `-w 80 -h 24` — Popup dimensions (adjust to preference)
 
 Now press `Ctrl-b, Ctrl-c` to open CCM from any tmux session.
+
+## Features
+
+- **Session Overview** — See all tmux sessions at a glance with Claude Code status indicators
+- **Status Detection** — Know whether each Claude Code instance is idle, working, or waiting for input
+- **Quick Switching** — Jump to any session with minimal keystrokes
+- **Live Preview** — See the last 15 lines of the selected session's Claude Code pane with full ANSI color support
+- **Session Management** — Create, kill, and rename sessions without leaving the TUI
+- **Expandable Details** — View metadata like window count, pane commands, uptime, and attachment status
+- **Fuzzy Filtering** — Quickly filter sessions by name or path
+
+## Screenshot
+
+<img src="docs/images/screenshot.png" alt="CCM Screenshot" width="400">
+
+**Status indicators:**
+- `●` — Working: Claude is actively processing
+- `○` — Idle: Ready for input
+- `◐` — Waiting for input: Permission prompt (`[y/n]`)
+- `?` — Unknown: Not a Claude Code session or status unclear
 
 ## Keybindings
 
