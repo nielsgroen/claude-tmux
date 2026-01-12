@@ -513,15 +513,15 @@ impl App {
             }
 
             if git.has_upstream {
-                // Push: ahead > 0 and clean
-                if git.ahead > 0 && !git.is_dirty() {
+                // Push: ahead > 0 (dirty state doesn't prevent pushing commits)
+                if git.ahead > 0 {
                     actions.push(SessionAction::Push);
                 }
-                // Pull: behind > 0 and clean
+                // Pull: behind > 0 and clean (dirty state can cause merge conflicts)
                 if git.behind > 0 && !git.is_dirty() {
                     actions.push(SessionAction::Pull);
                 }
-            } else if git.has_remote && !git.is_dirty() {
+            } else if git.has_remote {
                 // No upstream but remote exists - offer to push and set upstream
                 actions.push(SessionAction::PushSetUpstream);
             }
