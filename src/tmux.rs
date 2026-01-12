@@ -125,8 +125,8 @@ impl Tmux {
         for pane in panes {
             // Check if this pane is running claude
             if pane.current_command == "claude" || pane.current_command.contains("claude") {
-                // Capture pane content to detect status
-                let status = Self::capture_pane(&pane.id, 15)
+                // Capture pane content to detect status (strip empty lines for detection)
+                let status = Self::capture_pane(&pane.id, 15, true)
                     .map(|content| detect_status(&content))
                     .unwrap_or(ClaudeCodeStatus::Unknown);
 
@@ -142,7 +142,13 @@ impl Tmux {
     }
 
     /// Capture the last N lines of a pane's content
-    pub fn capture_pane(pane_id: &str, lines: usize) -> Result<String> {
+    ///
+    /// If `strip_empty` is true, empty lines are filtered out before taking the last N.
+    /// This is useful for status detection. For preview display, use `strip_empty: false`
+    /// to preserve the visual layout.
+    ///
+    /// ANSI escape sequences are always included - the UI handles rendering them.
+    pub fn capture_pane(pane_id: &str, lines: usize, strip_empty: bool) -> Result<String> {
         let output = Command::new("tmux")
             .args([
                 "capture-pane",
@@ -150,7 +156,7 @@ impl Tmux {
                 pane_id,
                 "-p", // Print to stdout
                 "-J", // Join wrapped lines
-                "-e", // Include escape sequences (for detecting spinners etc.)
+                "-e", // Include escape sequences
             ])
             .output()
             .context("Failed to capture pane")?;
@@ -161,12 +167,28 @@ impl Tmux {
 
         let content = String::from_utf8_lossy(&output.stdout);
 
-        // Filter out empty lines, then get last N
-        let non_empty: Vec<&str> = content.lines().filter(|l| !l.trim().is_empty()).collect();
-        let start = non_empty.len().saturating_sub(lines);
-        let last_lines = &non_empty[start..];
+        if strip_empty {
+            // Filter out empty lines, then get last N (for status detection)
+            let non_empty: Vec<&str> = content.lines().filter(|l| !l.trim().is_empty()).collect();
+            let start = non_empty.len().saturating_sub(lines);
+            let last_lines = &non_empty[start..];
+            Ok(last_lines.join("\n"))
+        } else {
+            // Preserve internal empty lines but trim trailing ones (for preview display)
+            let all_lines: Vec<&str> = content.lines().collect();
 
-        Ok(last_lines.join("\n"))
+            // Find last non-empty line
+            let last_non_empty = all_lines
+                .iter()
+                .rposition(|l| !l.trim().is_empty())
+                .map(|i| i + 1)
+                .unwrap_or(0);
+
+            let trimmed = &all_lines[..last_non_empty];
+            let start = trimmed.len().saturating_sub(lines);
+            let last_lines = &trimmed[start..];
+            Ok(last_lines.join("\n"))
+        }
     }
 
     /// Switch the current client to the specified session

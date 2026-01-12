@@ -47,6 +47,8 @@ pub struct App {
     pub error: Option<String>,
     /// Success message to display (clears on next action)
     pub message: Option<String>,
+    /// Cached preview content for the selected session's pane
+    pub preview_content: Option<String>,
 }
 
 impl App {
@@ -55,7 +57,7 @@ impl App {
         let sessions = Tmux::list_sessions()?;
         let current_session = Tmux::current_session()?;
 
-        Ok(Self {
+        let mut app = Self {
             sessions,
             selected: 0,
             mode: Mode::Normal,
@@ -64,7 +66,29 @@ impl App {
             filter: String::new(),
             error: None,
             message: None,
-        })
+            preview_content: None,
+        };
+
+        app.update_preview();
+        Ok(app)
+    }
+
+    /// Update the preview content for the currently selected session
+    pub fn update_preview(&mut self) {
+        const PREVIEW_LINES: usize = 15;
+
+        let pane_id = self.selected_session().and_then(|session| {
+            // Prefer Claude pane, fall back to first pane
+            session
+                .claude_code_pane
+                .clone()
+                .or_else(|| session.panes.first().map(|p| p.id.clone()))
+        });
+
+        self.preview_content = pane_id.and_then(|id| {
+            // Don't strip empty lines - preserve visual layout for preview
+            Tmux::capture_pane(&id, PREVIEW_LINES, false).ok()
+        });
     }
 
     /// Clear any displayed messages
@@ -83,6 +107,7 @@ impl App {
                 if self.selected >= self.sessions.len() && !self.sessions.is_empty() {
                     self.selected = self.sessions.len() - 1;
                 }
+                self.update_preview();
                 self.message = Some("Refreshed".to_string());
             }
             Err(e) => {
@@ -118,6 +143,7 @@ impl App {
         let count = self.filtered_sessions().len();
         if count > 0 && self.selected > 0 {
             self.selected -= 1;
+            self.update_preview();
         }
     }
 
@@ -126,6 +152,7 @@ impl App {
         let count = self.filtered_sessions().len();
         if count > 0 && self.selected < count - 1 {
             self.selected += 1;
+            self.update_preview();
         }
     }
 
@@ -269,6 +296,7 @@ impl App {
             self.selected = 0; // Reset selection when filter changes
         }
         self.mode = Mode::Normal;
+        self.update_preview();
     }
 
     /// Clear the filter

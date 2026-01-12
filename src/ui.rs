@@ -1,3 +1,4 @@
+use ansi_to_tui::IntoText;
 use ratatui::{
     layout::{Alignment, Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -14,19 +15,25 @@ use crate::session::ClaudeCodeStatus;
 pub fn render(frame: &mut Frame, app: &App) {
     let area = frame.area();
 
-    // Main layout: header, body, status bar, footer
+    // Calculate preview height (roughly 50% of available space, min 8, max 20 lines)
+    let available_height = area.height.saturating_sub(4); // minus header, status, footer
+    let preview_height = (available_height * 50 / 100).clamp(8, 20);
+
+    // Main layout: header, session list, preview, status bar, footer
     let layout = Layout::vertical([
-        Constraint::Length(1), // Header
-        Constraint::Min(5),    // Session list
-        Constraint::Length(1), // Status bar
-        Constraint::Length(1), // Footer
+        Constraint::Length(1),              // Header
+        Constraint::Min(3),                 // Session list
+        Constraint::Length(preview_height), // Preview pane
+        Constraint::Length(1),              // Status bar
+        Constraint::Length(1),              // Footer
     ])
     .split(area);
 
     render_header(frame, app, layout[0]);
     render_session_list(frame, app, layout[1]);
-    render_status_bar(frame, app, layout[2]);
-    render_footer(frame, app, layout[3]);
+    render_preview(frame, app, layout[2]);
+    render_status_bar(frame, app, layout[3]);
+    render_footer(frame, app, layout[4]);
 
     // Render modal overlays
     match &app.mode {
@@ -158,6 +165,68 @@ fn render_session_list(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(list, area);
 }
 
+fn render_preview(frame: &mut Frame, app: &App, area: Rect) {
+    // Clear the entire preview area first to prevent stale content
+    frame.render_widget(Clear, area);
+
+    // Draw separator lines at top and bottom
+    let separator = "─".repeat(area.width as usize);
+
+    let top_sep_area = Rect {
+        x: area.x,
+        y: area.y,
+        width: area.width,
+        height: 1,
+    };
+    let top_sep = Paragraph::new(separator.clone()).style(Style::default().fg(Color::DarkGray));
+    frame.render_widget(top_sep, top_sep_area);
+
+    let bottom_sep_area = Rect {
+        x: area.x,
+        y: area.y + area.height.saturating_sub(1),
+        width: area.width,
+        height: 1,
+    };
+    let bottom_sep = Paragraph::new(separator).style(Style::default().fg(Color::White));
+    frame.render_widget(bottom_sep, bottom_sep_area);
+
+    // Content area (between separators)
+    let content_area = Rect {
+        x: area.x,
+        y: area.y + 1,
+        width: area.width,
+        height: area.height.saturating_sub(2),
+    };
+
+    let content = match &app.preview_content {
+        Some(text) if !text.is_empty() => text,
+        _ => {
+            let msg = Paragraph::new("  No preview available")
+                .style(Style::default().fg(Color::DarkGray));
+            frame.render_widget(msg, content_area);
+            return;
+        }
+    };
+
+    // Parse ANSI escape sequences into styled ratatui Text
+    let styled_text = match content.into_text() {
+        Ok(text) => text,
+        Err(_) => {
+            // Fallback to plain text if parsing fails
+            Text::raw(content)
+        }
+    };
+
+    // Take only the last N lines that fit in the content area
+    let available_lines = content_area.height as usize;
+    let total_lines = styled_text.lines.len();
+    let start = total_lines.saturating_sub(available_lines);
+    let visible_lines: Vec<Line> = styled_text.lines.into_iter().skip(start).collect();
+
+    let preview = Paragraph::new(visible_lines);
+    frame.render_widget(preview, content_area);
+}
+
 fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
     let (working, waiting, _idle) = app.status_counts();
     let total = app.sessions.len();
@@ -188,7 +257,7 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
 
 fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
     let hints = match app.mode {
-        Mode::Normal => "  ↑↓/jk navigate  ⏎ switch  n new  K kill  r rename  / filter  R refresh  ? help  q quit",
+        Mode::Normal => "  ? help  ↑↓/jk navigate  ⏎ switch  n new  K kill  r rename  / filter  R refresh  q quit",
         Mode::Filter { .. } => "  ⏎ apply  esc cancel",
         Mode::ConfirmKill { .. } => "  ⏎/y confirm  n/esc cancel",
         Mode::NewSession { .. } => "  ⏎ create  tab switch field  esc cancel",
@@ -202,6 +271,7 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 fn render_filter_bar(frame: &mut Frame, input: &str, area: Rect) {
+    frame.render_widget(Clear, area);
     let text = format!("  / {}", input);
     let bar = Paragraph::new(text).style(Style::default().fg(Color::Yellow));
     frame.render_widget(bar, area);
