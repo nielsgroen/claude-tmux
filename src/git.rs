@@ -1,6 +1,10 @@
 use std::path::{Path, PathBuf};
 
-use git2::{Repository, StatusOptions};
+use anyhow::{Context, Result};
+use git2::{
+    AutotagOption, Cred, CredentialType, FetchOptions, PushOptions, RemoteCallbacks, Repository,
+    StatusOptions,
+};
 
 /// Git context for a session's working directory
 #[derive(Debug, Clone)]
@@ -13,6 +17,10 @@ pub struct GitContext {
     pub is_worktree: bool,
     /// Path to the main repository (if this is a worktree)
     pub main_repo_path: Option<PathBuf>,
+    /// Whether the branch has an upstream configured
+    pub has_upstream: bool,
+    /// Whether any remote is configured
+    pub has_remote: bool,
     /// Commits ahead of upstream
     pub ahead: usize,
     /// Commits behind upstream
@@ -64,34 +72,293 @@ impl GitContext {
             None
         };
 
-        // Check ahead/behind upstream
-        let (ahead, behind) = Self::get_ahead_behind(&repo).unwrap_or((0, 0));
+        // Check if any remote is configured
+        let has_remote = repo.remotes().map(|r| !r.is_empty()).unwrap_or(false);
+
+        // Check if upstream is configured and get ahead/behind
+        let (has_upstream, ahead, behind) = Self::get_upstream_info(&repo);
 
         Some(GitContext {
             branch,
             is_dirty,
             is_worktree,
             main_repo_path,
+            has_upstream,
+            has_remote,
             ahead,
             behind,
         })
     }
 
-    /// Get the number of commits ahead/behind the upstream branch
-    fn get_ahead_behind(repo: &Repository) -> Option<(usize, usize)> {
-        let head = repo.head().ok()?;
+    /// Get upstream info: (has_upstream, ahead, behind)
+    fn get_upstream_info(repo: &Repository) -> (bool, usize, usize) {
+        let head = match repo.head() {
+            Ok(h) => h,
+            Err(_) => return (false, 0, 0),
+        };
+
         if !head.is_branch() {
-            return None; // Detached HEAD has no upstream
+            return (false, 0, 0); // Detached HEAD has no upstream
         }
 
-        let branch_name = head.shorthand()?;
-        let local_branch = repo.find_branch(branch_name, git2::BranchType::Local).ok()?;
-        let upstream = local_branch.upstream().ok()?;
+        let branch_name = match head.shorthand() {
+            Some(n) => n,
+            None => return (false, 0, 0),
+        };
 
-        let local_oid = head.target()?;
-        let upstream_oid = upstream.get().target()?;
+        let local_branch = match repo.find_branch(branch_name, git2::BranchType::Local) {
+            Ok(b) => b,
+            Err(_) => return (false, 0, 0),
+        };
 
-        repo.graph_ahead_behind(local_oid, upstream_oid).ok()
+        let upstream = match local_branch.upstream() {
+            Ok(u) => u,
+            Err(_) => return (false, 0, 0), // No upstream configured
+        };
+
+        // Has upstream, now get ahead/behind
+        let local_oid = match head.target() {
+            Some(oid) => oid,
+            None => return (true, 0, 0),
+        };
+
+        let upstream_oid = match upstream.get().target() {
+            Some(oid) => oid,
+            None => return (true, 0, 0),
+        };
+
+        match repo.graph_ahead_behind(local_oid, upstream_oid) {
+            Ok((ahead, behind)) => (true, ahead, behind),
+            Err(_) => (true, 0, 0),
+        }
+    }
+
+    /// Push and set upstream (like git push -u origin branch)
+    pub fn push_set_upstream(path: &Path) -> Result<()> {
+        let repo = Repository::discover(path).context("Failed to open repository")?;
+
+        let head = repo.head().context("Failed to get HEAD")?;
+        if !head.is_branch() {
+            anyhow::bail!("Cannot push: HEAD is detached");
+        }
+
+        let branch_name = head
+            .shorthand()
+            .ok_or_else(|| anyhow::anyhow!("Invalid branch name"))?
+            .to_string();
+
+        // Find the first remote (usually "origin")
+        let remotes = repo.remotes().context("Failed to list remotes")?;
+        let remote_name = remotes
+            .get(0)
+            .ok_or_else(|| anyhow::anyhow!("No remotes configured"))?;
+
+        let mut remote = repo
+            .find_remote(remote_name)
+            .context("Failed to find remote")?;
+
+        let callbacks = Self::create_callbacks();
+        let mut push_options = PushOptions::new();
+        push_options.remote_callbacks(callbacks);
+
+        let refspec = format!("refs/heads/{}:refs/heads/{}", branch_name, branch_name);
+
+        remote
+            .push(&[&refspec], Some(&mut push_options))
+            .context("Push failed")?;
+
+        // Set upstream tracking branch
+        let mut local_branch = repo
+            .find_branch(&branch_name, git2::BranchType::Local)
+            .context("Failed to find local branch")?;
+
+        let upstream_name = format!("{}/{}", remote_name, branch_name);
+        local_branch
+            .set_upstream(Some(&upstream_name))
+            .context("Failed to set upstream")?;
+
+        Ok(())
+    }
+
+    /// Push to the upstream remote using libgit2
+    pub fn push(path: &Path) -> Result<()> {
+        let repo = Repository::discover(path).context("Failed to open repository")?;
+
+        let head = repo.head().context("Failed to get HEAD")?;
+        if !head.is_branch() {
+            anyhow::bail!("Cannot push: HEAD is detached");
+        }
+
+        let branch_name = head
+            .shorthand()
+            .ok_or_else(|| anyhow::anyhow!("Invalid branch name"))?;
+
+        let local_branch = repo
+            .find_branch(branch_name, git2::BranchType::Local)
+            .context("Failed to find local branch")?;
+
+        let upstream = local_branch
+            .upstream()
+            .context("No upstream branch configured")?;
+
+        // Get remote name from upstream ref (e.g., "origin/main" -> "origin")
+        let upstream_name = upstream
+            .name()
+            .context("Invalid upstream name")?
+            .ok_or_else(|| anyhow::anyhow!("Upstream name is not valid UTF-8"))?;
+
+        let remote_name = upstream_name
+            .split('/')
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("Cannot determine remote name"))?;
+
+        let mut remote = repo
+            .find_remote(remote_name)
+            .context("Failed to find remote")?;
+
+        let callbacks = Self::create_callbacks();
+        let mut push_options = PushOptions::new();
+        push_options.remote_callbacks(callbacks);
+
+        let refspec = format!("refs/heads/{}:refs/heads/{}", branch_name, branch_name);
+
+        remote
+            .push(&[&refspec], Some(&mut push_options))
+            .context("Push failed")?;
+
+        Ok(())
+    }
+
+    /// Pull (fetch + fast-forward merge) from upstream using libgit2
+    pub fn pull(path: &Path) -> Result<()> {
+        let repo = Repository::discover(path).context("Failed to open repository")?;
+
+        let head = repo.head().context("Failed to get HEAD")?;
+        if !head.is_branch() {
+            anyhow::bail!("Cannot pull: HEAD is detached");
+        }
+
+        let branch_name = head
+            .shorthand()
+            .ok_or_else(|| anyhow::anyhow!("Invalid branch name"))?;
+
+        let local_branch = repo
+            .find_branch(branch_name, git2::BranchType::Local)
+            .context("Failed to find local branch")?;
+
+        let upstream = local_branch
+            .upstream()
+            .context("No upstream branch configured")?;
+
+        // Get remote name from upstream ref
+        let upstream_name = upstream
+            .name()
+            .context("Invalid upstream name")?
+            .ok_or_else(|| anyhow::anyhow!("Upstream name is not valid UTF-8"))?;
+
+        let remote_name = upstream_name
+            .split('/')
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("Cannot determine remote name"))?;
+
+        let mut remote = repo
+            .find_remote(remote_name)
+            .context("Failed to find remote")?;
+
+        // Fetch
+        let callbacks = Self::create_callbacks();
+        let mut fetch_options = FetchOptions::new();
+        fetch_options.remote_callbacks(callbacks);
+        fetch_options.download_tags(AutotagOption::Auto);
+
+        remote
+            .fetch(&[branch_name], Some(&mut fetch_options), None)
+            .context("Fetch failed")?;
+
+        // Get the fetch head
+        let fetch_head = repo
+            .find_reference("FETCH_HEAD")
+            .context("Failed to find FETCH_HEAD")?;
+
+        let fetch_commit = repo
+            .reference_to_annotated_commit(&fetch_head)
+            .context("Failed to get fetch commit")?;
+
+        // Perform fast-forward merge
+        let (analysis, _) = repo
+            .merge_analysis(&[&fetch_commit])
+            .context("Merge analysis failed")?;
+
+        if analysis.is_up_to_date() {
+            // Already up to date
+            return Ok(());
+        }
+
+        if analysis.is_fast_forward() {
+            // Fast-forward
+            let target_oid = fetch_commit.id();
+            let mut reference = repo.find_reference(&format!("refs/heads/{}", branch_name))?;
+            reference.set_target(target_oid, "fast-forward pull")?;
+            repo.set_head(&format!("refs/heads/{}", branch_name))?;
+            repo.checkout_head(Some(git2::build::CheckoutBuilder::new().force()))?;
+            Ok(())
+        } else {
+            anyhow::bail!("Cannot fast-forward; manual merge required")
+        }
+    }
+
+    /// Create remote callbacks for authentication
+    fn create_callbacks() -> RemoteCallbacks<'static> {
+        let mut callbacks = RemoteCallbacks::new();
+
+        callbacks.credentials(|url, username_from_url, allowed_types| {
+            // Try SSH agent first
+            if allowed_types.contains(CredentialType::SSH_KEY) {
+                if let Some(username) = username_from_url {
+                    // Try SSH agent
+                    if let Ok(cred) = Cred::ssh_key_from_agent(username) {
+                        return Ok(cred);
+                    }
+
+                    // Try default SSH key locations
+                    let home = dirs::home_dir().unwrap_or_default();
+                    let ssh_dir = home.join(".ssh");
+
+                    for key_name in &["id_ed25519", "id_rsa", "id_ecdsa"] {
+                        let key_path = ssh_dir.join(key_name);
+                        if key_path.exists() {
+                            if let Ok(cred) =
+                                Cred::ssh_key(username, None, &key_path, None)
+                            {
+                                return Ok(cred);
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Try default credentials (for HTTPS with credential helper)
+            if allowed_types.contains(CredentialType::DEFAULT) {
+                if let Ok(cred) = Cred::default() {
+                    return Ok(cred);
+                }
+            }
+
+            // Try username/password from git credential helper
+            if allowed_types.contains(CredentialType::USER_PASS_PLAINTEXT) {
+                if let Ok(cred) = Cred::credential_helper(
+                    &git2::Config::open_default().unwrap_or_else(|_| git2::Config::new().unwrap()),
+                    url,
+                    username_from_url,
+                ) {
+                    return Ok(cred);
+                }
+            }
+
+            Err(git2::Error::from_str("No valid credentials found"))
+        });
+
+        callbacks
     }
 }
 

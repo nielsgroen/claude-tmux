@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 
+use crate::git::GitContext;
 use crate::session::Session;
 use crate::tmux::Tmux;
 
@@ -31,6 +32,12 @@ pub enum SessionAction {
     SwitchTo,
     /// Rename this session
     Rename,
+    /// Push commits to remote
+    Push,
+    /// Push and set upstream branch
+    PushSetUpstream,
+    /// Pull commits from remote
+    Pull,
     /// Kill this session
     Kill,
     /// Kill session and delete its worktree
@@ -43,6 +50,9 @@ impl SessionAction {
         match self {
             Self::SwitchTo => "Switch to session",
             Self::Rename => "Rename session",
+            Self::Push => "Push to remote",
+            Self::PushSetUpstream => "Push and set upstream",
+            Self::Pull => "Pull from remote",
             Self::Kill => "Kill session",
             Self::KillAndDeleteWorktree => "Kill session + delete worktree",
         }
@@ -233,6 +243,7 @@ impl App {
     /// Execute an action on the selected session
     fn execute_action(&mut self, action: SessionAction) {
         let Some(session) = self.selected_session() else {
+            self.mode = Mode::Normal;
             return;
         };
         let session_name = session.name.clone();
@@ -243,14 +254,47 @@ impl App {
                     Ok(_) => self.should_quit = true,
                     Err(e) => self.error = Some(format!("Failed to switch: {}", e)),
                 }
+                self.mode = Mode::Normal;
             }
             SessionAction::Rename => {
-                // Enter rename mode
+                // Enter rename mode (don't set Normal)
                 self.mode = Mode::Rename {
                     old_name: session_name.clone(),
                     new_name: session_name,
                 };
-                return; // Don't reset mode to Normal
+            }
+            SessionAction::Push => {
+                let path = session.working_directory.clone();
+                match GitContext::push(&path) {
+                    Ok(_) => {
+                        self.message = Some("Pushed to remote".to_string());
+                        self.refresh();
+                    }
+                    Err(e) => self.error = Some(format!("Push failed: {}", e)),
+                }
+                self.mode = Mode::Normal;
+            }
+            SessionAction::PushSetUpstream => {
+                let path = session.working_directory.clone();
+                match GitContext::push_set_upstream(&path) {
+                    Ok(_) => {
+                        self.message = Some("Pushed and set upstream".to_string());
+                        self.refresh();
+                    }
+                    Err(e) => self.error = Some(format!("Push failed: {}", e)),
+                }
+                self.mode = Mode::Normal;
+            }
+            SessionAction::Pull => {
+                let path = session.working_directory.clone();
+                match GitContext::pull(&path) {
+                    Ok(_) => {
+                        self.message = Some("Pulled from remote".to_string());
+                        self.refresh();
+                    }
+                    Err(e) => self.error = Some(format!("Pull failed: {}", e)),
+                }
+                self.mode = Mode::Normal;
             }
             SessionAction::Kill => {
                 match Tmux::kill_session(&session_name) {
@@ -260,6 +304,7 @@ impl App {
                     }
                     Err(e) => self.error = Some(format!("Failed to kill: {}", e)),
                 }
+                self.mode = Mode::Normal;
             }
             SessionAction::KillAndDeleteWorktree => {
                 // For now, just kill the session (worktree deletion is Stage 3)
@@ -270,6 +315,7 @@ impl App {
                     }
                     Err(e) => self.error = Some(format!("Failed to kill: {}", e)),
                 }
+                self.mode = Mode::Normal;
             }
         }
     }
@@ -396,8 +442,26 @@ impl App {
         let mut actions = vec![
             SessionAction::SwitchTo,
             SessionAction::Rename,
-            SessionAction::Kill,
         ];
+
+        // Add git actions if applicable
+        if let Some(ref git) = session.git_context {
+            if git.has_upstream {
+                // Push: ahead > 0 and clean
+                if git.ahead > 0 && !git.is_dirty {
+                    actions.push(SessionAction::Push);
+                }
+                // Pull: behind > 0 and clean
+                if git.behind > 0 && !git.is_dirty {
+                    actions.push(SessionAction::Pull);
+                }
+            } else if git.has_remote && !git.is_dirty {
+                // No upstream but remote exists - offer to push and set upstream
+                actions.push(SessionAction::PushSetUpstream);
+            }
+        }
+
+        actions.push(SessionAction::Kill);
 
         // Add worktree deletion option if this is a worktree
         if let Some(ref git) = session.git_context {
@@ -444,8 +508,9 @@ impl App {
                 self.pending_action = Some(action);
                 self.mode = Mode::ConfirmAction;
             } else {
+                // execute_action handles its own mode transitions
+                // (e.g., Rename sets Mode::Rename, SwitchTo quits)
                 self.execute_action(action);
-                self.mode = Mode::Normal;
             }
         }
     }
