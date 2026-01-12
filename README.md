@@ -40,6 +40,8 @@ Now press `Ctrl-b, Ctrl-c` to open claude-tmux from any tmux session.
 
 <img src="docs/images/screenshot.png" alt="claude-tmux Screenshot" width="400">
 
+<img src="docs/images/screenshot2.png" alt="claude-tmux Screenshot 2" width="400">
+
 **Status indicators:**
 - `●` — Working: Claude is actively processing
 - `○` — Idle: Ready for input
