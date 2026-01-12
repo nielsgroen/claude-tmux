@@ -49,7 +49,7 @@ Options:
 - **Session Overview** — See all tmux sessions at a glance with Claude Code status indicators
 - **Status Detection** — Know whether each Claude Code instance is idle, working, or waiting for input
 - **Quick Switching** — Jump to any session with minimal keystrokes
-- **Live Preview** — See the last 15 lines of the selected session's Claude Code pane with full ANSI color support
+- **Live Preview** — See the last lines of the selected session's Claude Code pane with full ANSI color support
 - **Session Management** — Create, kill, and rename sessions without leaving the TUI
 - **Expandable Details** — View metadata like window count, pane commands, uptime, and attachment status
 - **Fuzzy Filtering** — Quickly filter sessions by name or path
