@@ -344,35 +344,281 @@ fn handle_action_menu_mode(app: &mut App, key: KeyEvent) -> bool {
 
 ---
 
-## Stage 3: Worktree Actions
+## Stage 3: Worktree Management
 
-**Goal**: Implement actual worktree deletion when "Kill session + delete worktree" is selected.
+**Goal**: Full worktree lifecycle support - create sessions from new/existing worktrees, and delete worktrees when killing sessions.
 
-### Git Module Extensions
+### 3.1 Create Session from Worktree
+
+**Entry point**: Action menu on any session that's in a git repository.
+
+**Action**: "New session from worktree"
+
+#### UX Flow
+
+```
+┌─ New Session from Worktree ───────────────────┐
+│                                               │
+│  Branch:  [feature/new-thing____]  (new)      │
+│           ─────────────────────────           │
+│           > main                              │
+│             develop                           │
+│             feature/existing                  │
+│           ─────────────────────────           │
+│                                               │
+│  Path:    [~/repos/project-new-thing__]       │
+│                                               │
+│  Session: [project-new-thing_________]        │
+│                                               │
+│  [Tab] Next  [Enter] Create  [Esc] Cancel     │
+└───────────────────────────────────────────────┘
+```
+
+**Behavior**:
+- **Branch field**: Text input that filters/searches existing branches. If input doesn't match an existing branch exactly, it's treated as a new branch name.
+- **Path field**: Auto-populated as `{parent_of_repo}/{branch_name}` (sanitized). User can edit.
+- **Session field**: Auto-populated from branch name (sanitized). User can edit.
+
+#### Data Model
+
+```rust
+// src/app.rs
+
+pub enum Mode {
+    // ... existing modes ...
+
+    /// Creating a new session from a worktree
+    NewWorktree {
+        /// The source repository path (from selected session)
+        source_repo: PathBuf,
+        /// Branch name input (may be new or existing)
+        branch_input: String,
+        /// Filtered list of existing branches
+        filtered_branches: Vec<String>,
+        /// Selected index in filtered branches (None = creating new branch)
+        selected_branch: Option<usize>,
+        /// Worktree path
+        worktree_path: String,
+        /// Session name
+        session_name: String,
+        /// Which field is active
+        field: NewWorktreeField,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NewWorktreeField {
+    Branch,
+    Path,
+    SessionName,
+}
+```
+
+```rust
+// src/app.rs - new action
+
+pub enum SessionAction {
+    // ... existing actions ...
+
+    /// Create a new session from a worktree (new or existing branch)
+    NewWorktree,
+}
+```
+
+#### Git Module Extensions
+
+```rust
+// src/git.rs additions
+
+impl GitContext {
+    /// List all local branch names in the repository
+    pub fn list_branches(repo_path: &Path) -> Result<Vec<String>> {
+        let repo = Repository::discover(repo_path)?;
+        let mut branches = Vec::new();
+
+        for branch in repo.branches(Some(BranchType::Local))? {
+            let (branch, _) = branch?;
+            if let Some(name) = branch.name()? {
+                branches.push(name.to_string());
+            }
+        }
+
+        // Sort with main/master first, then alphabetically
+        branches.sort_by(|a, b| {
+            let a_is_main = a == "main" || a == "master";
+            let b_is_main = b == "main" || b == "master";
+            match (a_is_main, b_is_main) {
+                (true, false) => std::cmp::Ordering::Less,
+                (false, true) => std::cmp::Ordering::Greater,
+                _ => a.cmp(b),
+            }
+        });
+
+        Ok(branches)
+    }
+
+    /// Create a new worktree
+    /// - If branch exists: checkout that branch in the new worktree
+    /// - If branch is new: create branch from HEAD and checkout in worktree
+    pub fn create_worktree(
+        repo_path: &Path,
+        worktree_path: &Path,
+        branch_name: &str,
+        is_new_branch: bool,
+    ) -> Result<()> {
+        let repo = Repository::discover(repo_path)?;
+
+        if is_new_branch {
+            // Create new branch from HEAD, then create worktree
+            let head = repo.head()?;
+            let commit = head.peel_to_commit()?;
+
+            // Create the worktree with a new branch
+            repo.worktree(
+                branch_name,  // worktree name (usually same as branch)
+                worktree_path,
+                Some(WorktreeAddOptions::new().reference(Some(&commit.id().to_string()))),
+            )?;
+        } else {
+            // Branch exists - create worktree for existing branch
+            let branch = repo.find_branch(branch_name, BranchType::Local)?;
+            let reference = branch.into_reference();
+
+            repo.worktree(
+                branch_name,
+                worktree_path,
+                Some(WorktreeAddOptions::new().reference(reference.name())),
+            )?;
+        }
+
+        Ok(())
+    }
+}
+```
+
+#### Input Handling
+
+```rust
+// src/input.rs
+
+fn handle_new_worktree_mode(app: &mut App, key: KeyEvent) -> bool {
+    if let Mode::NewWorktree {
+        ref mut branch_input,
+        ref mut filtered_branches,
+        ref mut selected_branch,
+        ref mut worktree_path,
+        ref mut session_name,
+        ref mut field,
+        ref source_repo,
+    } = app.mode {
+        match key.code {
+            KeyCode::Tab => {
+                // Cycle through fields
+                *field = match field {
+                    NewWorktreeField::Branch => NewWorktreeField::Path,
+                    NewWorktreeField::Path => NewWorktreeField::SessionName,
+                    NewWorktreeField::SessionName => NewWorktreeField::Branch,
+                };
+            }
+            KeyCode::Enter => {
+                app.confirm_new_worktree();
+            }
+            KeyCode::Esc => {
+                app.mode = Mode::Normal;
+            }
+            KeyCode::Char(c) => {
+                match field {
+                    NewWorktreeField::Branch => {
+                        branch_input.push(c);
+                        // Re-filter branches and update suggestions
+                        app.update_worktree_suggestions();
+                    }
+                    NewWorktreeField::Path => worktree_path.push(c),
+                    NewWorktreeField::SessionName => session_name.push(c),
+                }
+            }
+            KeyCode::Backspace => {
+                match field {
+                    NewWorktreeField::Branch => {
+                        branch_input.pop();
+                        app.update_worktree_suggestions();
+                    }
+                    NewWorktreeField::Path => { worktree_path.pop(); }
+                    NewWorktreeField::SessionName => { session_name.pop(); }
+                }
+            }
+            // Navigate branch suggestions when in Branch field
+            KeyCode::Down if *field == NewWorktreeField::Branch => {
+                if !filtered_branches.is_empty() {
+                    *selected_branch = Some(
+                        selected_branch.map(|i| (i + 1) % filtered_branches.len()).unwrap_or(0)
+                    );
+                }
+            }
+            KeyCode::Up if *field == NewWorktreeField::Branch => {
+                if !filtered_branches.is_empty() {
+                    *selected_branch = Some(
+                        selected_branch
+                            .map(|i| if i == 0 { filtered_branches.len() - 1 } else { i - 1 })
+                            .unwrap_or(filtered_branches.len() - 1)
+                    );
+                }
+            }
+            _ => {}
+        }
+    }
+    false
+}
+```
+
+### 3.2 Delete Worktree
+
+**Entry point**: Action menu on a session that's in a worktree (not main repo).
+
+**Action**: "Kill session + delete worktree"
+
+#### Git Module Extensions
 
 ```rust
 // src/git.rs additions
 
 impl GitContext {
     /// Delete the worktree at the given path
-    /// This removes the worktree from git and optionally the directory
+    /// Returns an error if the worktree has uncommitted changes (unless force=true)
     pub fn delete_worktree(worktree_path: &Path, force: bool) -> Result<()> {
         let repo = Repository::discover(worktree_path)?;
 
+        // We need to open the main repo to manage worktrees
+        let main_repo = if repo.is_worktree() {
+            Repository::open(repo.commondir())?
+        } else {
+            return Err(anyhow!("Not a worktree"));
+        };
+
         // Find the worktree by path
-        let worktrees = repo.worktrees()?;
+        let worktrees = main_repo.worktrees()?;
         for name in worktrees.iter() {
             let name = name.ok_or_else(|| anyhow!("Invalid worktree name"))?;
-            let wt = repo.find_worktree(name)?;
-            if wt.path() == worktree_path {
-                // Validate it's safe to delete
-                if !force {
-                    wt.validate()?; // Ensures no uncommitted changes, etc.
-                }
-                wt.prune(PruneOptions::new())?;
+            let wt = main_repo.find_worktree(name)?;
 
-                // Remove the directory
-                std::fs::remove_dir_all(worktree_path)?;
+            if wt.path() == worktree_path {
+                // Validate it's safe to delete (checks for uncommitted changes)
+                if !force {
+                    wt.validate()
+                        .context("Worktree has uncommitted changes or other issues")?;
+                }
+
+                // Prune the worktree from git's tracking
+                let mut prune_opts = git2::WorktreePruneOptions::new();
+                if force {
+                    prune_opts.valid(true);  // Prune even if valid
+                }
+                wt.prune(Some(&mut prune_opts))?;
+
+                // Remove the directory from disk
+                std::fs::remove_dir_all(worktree_path)
+                    .context("Failed to remove worktree directory")?;
+
                 return Ok(());
             }
         }
@@ -382,12 +628,11 @@ impl GitContext {
 }
 ```
 
-### Safety Checks
+#### Safety Checks
 
 Before deleting a worktree, verify:
 1. It actually is a worktree (not main repo)
-2. Working directory is clean (or user confirms force)
-3. No other tmux sessions are using this path
+2. Working directory is clean (refuse if dirty - no force option in UI)
 
 ```rust
 impl App {
@@ -399,18 +644,8 @@ impl App {
             return Err("Not a worktree");
         }
 
-        if git.is_dirty {
+        if git.is_dirty() {
             return Err("Worktree has uncommitted changes");
-        }
-
-        // Check if other sessions use this path
-        let path = &session.working_directory;
-        let other_sessions = self.sessions.iter()
-            .filter(|s| s.name != session.name && s.working_directory == *path)
-            .count();
-
-        if other_sessions > 0 {
-            return Err("Other sessions are using this worktree");
         }
 
         Ok(())
@@ -418,7 +653,7 @@ impl App {
 }
 ```
 
-### Confirmation Dialog Enhancement
+#### Confirmation Dialog Enhancement
 
 ```
 ┌─ Confirm Action ──────────────────────────────┐
@@ -433,13 +668,57 @@ impl App {
 └───────────────────────────────────────────────┘
 ```
 
+### 3.3 Helper Functions
+
+```rust
+// src/app.rs or src/util.rs
+
+/// Sanitize a branch name for use as a directory/session name
+/// e.g., "feature/new-thing" -> "new-thing"
+fn sanitize_for_path(branch: &str) -> String {
+    branch
+        .rsplit('/')
+        .next()
+        .unwrap_or(branch)
+        .replace(['/', '\\', ' ', ':'], "-")
+}
+
+/// Generate default worktree path from repo path and branch name
+/// e.g., ~/repos/project + feature/foo -> ~/repos/project-foo
+fn default_worktree_path(repo_path: &Path, branch: &str) -> PathBuf {
+    let parent = repo_path.parent().unwrap_or(repo_path);
+    let repo_name = repo_path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("repo");
+    let branch_suffix = sanitize_for_path(branch);
+    parent.join(format!("{}-{}", repo_name, branch_suffix))
+}
+```
+
 ### Files to Modify
 
 | File | Changes |
 |------|---------|
-| `src/git.rs` | Add `delete_worktree()` function |
-| `src/app.rs` | Add `can_delete_worktree()`, implement worktree deletion in `perform_action()` |
-| `src/ui.rs` | Enhance confirmation dialog for worktree actions |
+| `src/git.rs` | Add `list_branches()`, `create_worktree()`, `delete_worktree()` |
+| `src/app.rs` | Add `Mode::NewWorktree`, `SessionAction::NewWorktree`, worktree creation/deletion logic, helper functions |
+| `src/input.rs` | Add `handle_new_worktree_mode()` |
+| `src/ui.rs` | Add `render_new_worktree_dialog()`, enhance confirmation dialog |
+
+### Implementation Order
+
+| Step | Task | Depends On |
+|------|------|------------|
+| 3.1a | `git.rs`: Add `list_branches()` | - |
+| 3.1b | `git.rs`: Add `create_worktree()` | - |
+| 3.1c | `app.rs`: Add `Mode::NewWorktree` and `SessionAction::NewWorktree` | 3.1a |
+| 3.1d | `input.rs`: Add `handle_new_worktree_mode()` | 3.1c |
+| 3.1e | `ui.rs`: Add `render_new_worktree_dialog()` | 3.1c |
+| 3.1f | `app.rs`: Wire up `confirm_new_worktree()` | 3.1b, 3.1d |
+| 3.2a | `git.rs`: Add `delete_worktree()` | - |
+| 3.2b | `app.rs`: Add `can_delete_worktree()` | 3.2a |
+| 3.2c | `app.rs`: Implement `KillAndDeleteWorktree` action | 3.2a, 3.2b |
+| 3.2d | `ui.rs`: Enhance confirmation dialog | 3.2c |
 
 ---
 
