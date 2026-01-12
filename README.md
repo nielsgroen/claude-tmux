@@ -14,7 +14,7 @@ A terminal user interface for managing multiple Claude Code sessions within tmux
 
 ## Screenshot
 
-![CCM Screenshot](docs/images/screenshot.png)
+<img src="docs/images/screenshot.png" alt="CCM Screenshot" width="600">
 
 **Status indicators:**
 - `●` — Working: Claude is actively processing
