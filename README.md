@@ -1,30 +1,30 @@
-# CCM - Claude Code Manager
+# claude-tmux
 
-A terminal user interface for managing multiple Claude Code sessions within tmux. CCM provides a centralized view of all your Claude Code instances, enabling quick switching, status monitoring, and session lifecycle management.
+A terminal user interface for managing multiple Claude Code sessions within tmux. claude-tmux provides a centralized view of all your Claude Code instances, enabling quick switching, status monitoring, and session lifecycle management.
 
 ## Installation
 
 ### Build from source
 
 ```bash
-git clone https://github.com/nielsgroen/ccm.git
-cd ccm
+git clone https://github.com/nielsgroen/claude-tmux.git
+cd claude-tmux
 cargo build --release
 ```
 
 ### tmux Integration
 
-Add this to your `~/.tmux.conf` to bind CCM to a key:
+Add this to your `~/.tmux.conf` to bind claude-tmux to a key:
 
 ```bash
-bind-key C-c display-popup -E -w 80 -h 24 "/path/to/ccm"
+bind-key C-c display-popup -E -w 80 -h 24 "/path/to/claude-tmux"
 ```
 
 Options:
-- `-E` — Close popup when CCM exits
+- `-E` — Close popup when claude-tmux exits
 - `-w 80 -h 24` — Popup dimensions (adjust to preference)
 
-Now press `Ctrl-b, Ctrl-c` to open CCM from any tmux session.
+Now press `Ctrl-b, Ctrl-c` to open claude-tmux from any tmux session.
 
 ## Features
 
@@ -38,7 +38,7 @@ Now press `Ctrl-b, Ctrl-c` to open CCM from any tmux session.
 
 ## Screenshot
 
-<img src="docs/images/screenshot.png" alt="CCM Screenshot" width="400">
+<img src="docs/images/screenshot.png" alt="claude-tmux Screenshot" width="400">
 
 **Status indicators:**
 - `●` — Working: Claude is actively processing
@@ -78,7 +78,7 @@ Now press `Ctrl-b, Ctrl-c` to open CCM from any tmux session.
 
 ## Status Detection
 
-CCM detects Claude Code status by analyzing pane content:
+claude-tmux detects Claude Code status by analyzing pane content:
 
 | Pattern | Status |
 |---------|--------|
@@ -89,7 +89,7 @@ CCM detects Claude Code status by analyzing pane content:
 
 ## Session Model
 
-CCM identifies sessions containing Claude Code by looking for panes running the `claude` command. The displayed working directory and preview come from the Claude Code pane when present, otherwise from the first pane.
+claude-tmux identifies sessions containing Claude Code by looking for panes running the `claude` command. The displayed working directory and preview come from the Claude Code pane when present, otherwise from the first pane.
 
 Sessions are sorted with attached sessions first, then alphabetically by name.
 
@@ -105,7 +105,7 @@ Sessions are sorted with attached sessions first, then alphabetically by name.
 ## Project Structure
 
 ```
-ccm/
+claude-tmux/
 ├── Cargo.toml
 ├── src/
 │   ├── main.rs        # Entry point, terminal setup

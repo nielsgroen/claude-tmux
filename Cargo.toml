@@ -1,8 +1,8 @@
 [package]
-name = "ccm"
+name = "claude-tmux"
 version = "0.1.0"
 edition = "2021"
-description = "Claude Code Manager - TUI for managing Claude Code tmux sessions"
+description = "TUI for managing Claude Code tmux sessions"
 license = "MIT"
 
 [dependencies]

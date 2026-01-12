@@ -70,7 +70,7 @@ fn render_header(frame: &mut Frame, app: &App, area: Rect) {
         .map(|s| format!(" attached: {} ", s))
         .unwrap_or_default();
 
-    let title = format!("─ CCM ─{:─>width$}", current, width = area.width as usize - 7);
+    let title = format!("─ claude-tmux ─{:─>width$}", current, width = area.width as usize - 15);
 
     let header = Paragraph::new(title)
         .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD));
