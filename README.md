@@ -12,6 +12,15 @@ Just run:
 cargo install claude-tmux
 ```
 
+Add the following line to your `~/.tmux.conf`:
+
+```bash
+bind-key C-c display-popup -E -w 80 -h 30 "~/.cargo/bin/claude-tmux"
+```
+
+Reload your tmux configuration.
+Press `Ctrl-b, Ctrl-c` to open claude-tmux from any tmux session.
+
 ### Build from source
 
 ```bash
@@ -20,25 +29,20 @@ cd claude-tmux
 cargo build --release
 ```
 
-### tmux Integration
-
 Add this to your `~/.tmux.conf` to bind claude-tmux to a key:
 
 ```bash
 bind-key C-c display-popup -E -w 80 -h 30 "/path/to/claude-tmux"
 ```
 
-If you used `cargo install claude-tmux`:
+Reload your tmux configuration.
+Press `Ctrl-b, Ctrl-c` to open claude-tmux from any tmux session.
 
-```bash
-bind-key C-c display-popup -E -w 80 -h 30 "~/.cargo/bin/claude-tmux"
-```
+### Tmux options
 
 Options:
 - `-E` — Close popup when claude-tmux exits
 - `-w 80 -h 30` — Popup dimensions (adjust to preference)
-
-Now press `Ctrl-b, Ctrl-c` to open claude-tmux from any tmux session.
 
 ## Features
 
