@@ -3,7 +3,7 @@ use ratatui::{
     layout::{Alignment, Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap},
+    widgets::{Block, Borders, Clear, List, ListItem, Paragraph, StatefulWidget, Wrap},
     Frame,
 };
 use unicode_width::UnicodeWidthStr;
@@ -12,7 +12,7 @@ use crate::app::{App, CreatePullRequestField, Mode, NewSessionField, NewWorktree
 use crate::session::ClaudeCodeStatus;
 
 /// Render the application UI
-pub fn render(frame: &mut Frame, app: &App) {
+pub fn render(frame: &mut Frame, app: &mut App) {
     let area = frame.area();
 
     // Calculate preview height (roughly 50% of available space, min 8, max 20 lines)
@@ -117,7 +117,16 @@ fn render_header(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(header, area);
 }
 
-fn render_session_list(frame: &mut Frame, app: &App, area: Rect) {
+fn render_session_list(frame: &mut Frame, app: &mut App, area: Rect) {
+    // Compute scroll state values before borrowing for items
+    let selected_index = app.compute_flat_list_index();
+    let total_items = app.compute_total_list_items();
+    let visible_height = area.height as usize;
+
+    // Take scroll_state out of app to avoid borrow conflicts
+    // (items building borrows app immutably, scroll_state needs mutable access)
+    let mut scroll_state = std::mem::take(&mut app.scroll_state);
+
     let filtered = app.filtered_sessions();
 
     if filtered.is_empty() {
@@ -130,6 +139,8 @@ fn render_session_list(frame: &mut Frame, app: &App, area: Rect) {
             .style(Style::default().fg(Color::DarkGray))
             .alignment(Alignment::Center);
         frame.render_widget(paragraph, area);
+        // Put scroll_state back before returning
+        app.scroll_state = scroll_state;
         return;
     }
 
@@ -394,8 +405,19 @@ fn render_session_list(frame: &mut Frame, app: &App, area: Rect) {
         }
     }
 
-    let list = List::new(items);
-    frame.render_widget(list, area);
+    // Scope the list rendering so borrows are released before we restore scroll_state
+    {
+        let list = List::new(items);
+
+        // Update scroll state with centered scrolling behavior
+        let list_state = scroll_state.update(selected_index, total_items, visible_height);
+
+        // Render with stateful widget for proper scrolling
+        StatefulWidget::render(list, area, frame.buffer_mut(), list_state);
+    }
+
+    // Put scroll_state back into app (list borrows are now released)
+    app.scroll_state = scroll_state;
 }
 
 fn render_preview(frame: &mut Frame, app: &App, area: Rect) {

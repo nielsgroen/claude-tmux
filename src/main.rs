@@ -3,6 +3,7 @@ mod completion;
 mod detection;
 mod git;
 mod input;
+mod scroll_state;
 mod session;
 mod tmux;
 mod ui;
@@ -42,7 +43,7 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
 
     loop {
         // Draw the UI
-        terminal.draw(|frame| ui::render(frame, &app))?;
+        terminal.draw(|frame| ui::render(frame, &mut app))?;
 
         // Check if we should quit
         if app.should_quit {

@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use anyhow::Result;
 
 use crate::git::{self, GitContext, PullRequestInfo};
+use crate::scroll_state::ScrollState;
 use crate::session::Session;
 use crate::tmux::Tmux;
 
@@ -188,6 +189,8 @@ pub struct App {
     pub pending_action: Option<SessionAction>,
     /// PR info for the selected session (computed when entering action menu)
     pub pr_info: Option<PullRequestInfo>,
+    /// Scroll state for the session list
+    pub scroll_state: ScrollState,
 }
 
 impl App {
@@ -210,6 +213,7 @@ impl App {
             selected_action: 0,
             pending_action: None,
             pr_info: None,
+            scroll_state: ScrollState::new(),
         };
 
         app.update_preview();
@@ -1332,6 +1336,93 @@ impl App {
                 *selected_branch = None;
             }
             self.update_worktree_suggestions();
+        }
+    }
+
+    /// Compute the flat list index for the current selection.
+    ///
+    /// The list has a complex structure where the selected session expands
+    /// to show metadata and action items. This method computes the index
+    /// into the flat list of rendered items.
+    pub fn compute_flat_list_index(&self) -> usize {
+        let filtered_count = self.filtered_sessions().len();
+        if filtered_count == 0 {
+            return 0;
+        }
+
+        match self.mode {
+            Mode::ActionMenu => {
+                // Count items before selected session (1 row each)
+                let mut index = self.selected;
+
+                // Add 1 for the selected session row itself
+                index += 1;
+
+                // Add 1 for metadata row (always present when expanded)
+                index += 1;
+
+                // Add 1 for git info row if present
+                if self.selected_session().is_some_and(|s| s.git_context.is_some()) {
+                    index += 1;
+
+                    // Add 1 for PR info row if present
+                    if self.pr_info.is_some() {
+                        index += 1;
+                    }
+                }
+
+                // Add 1 for separator
+                index += 1;
+
+                // Add selected_action to get to the highlighted action
+                index += self.selected_action;
+
+                index
+            }
+            _ => {
+                // In non-ActionMenu modes, just the session index
+                self.selected
+            }
+        }
+    }
+
+    /// Compute the total number of items in the rendered list.
+    ///
+    /// This accounts for the expanded content when in ActionMenu mode.
+    pub fn compute_total_list_items(&self) -> usize {
+        let filtered_count = self.filtered_sessions().len();
+        if filtered_count == 0 {
+            return 0;
+        }
+
+        match self.mode {
+            Mode::ActionMenu => {
+                // Base: one row per session
+                let mut total = filtered_count;
+
+                // Add expanded content for selected session:
+                // - 1 metadata row
+                // - 1 git info row (if git context)
+                // - 1 PR info row (if pr_info)
+                // - 1 separator
+                // - N action rows
+                // - 1 end separator
+                total += 1; // metadata row
+
+                if self.selected_session().is_some_and(|s| s.git_context.is_some()) {
+                    total += 1; // git info row
+                    if self.pr_info.is_some() {
+                        total += 1; // PR info row
+                    }
+                }
+
+                total += 1; // separator
+                total += self.available_actions.len(); // action rows
+                total += 1; // end separator
+
+                total
+            }
+            _ => filtered_count,
         }
     }
 }
