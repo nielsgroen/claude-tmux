@@ -545,6 +545,10 @@ fn render_confirm_action(frame: &mut Frame, app: &App) {
         .and_then(|s| s.git_context.as_ref())
         .map(|g| g.is_worktree)
         .unwrap_or(false);
+    let is_current_session = app
+        .current_session
+        .as_ref()
+        .is_some_and(|c| c == session_name);
 
     match &app.pending_action {
         Some(SessionAction::KillAndDeleteWorktree) => {
@@ -552,14 +556,15 @@ fn render_confirm_action(frame: &mut Frame, app: &App) {
                 .map(|s| s.display_path())
                 .unwrap_or_else(|| "?".to_string());
 
-            let area = centered_rect(55, 9, frame.area());
+            let dialog_height = if is_current_session { 11 } else { 9 };
+            let area = centered_rect(55, dialog_height, frame.area());
 
             let block = Block::default()
                 .title(" Confirm ")
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(Color::Red));
 
-            let text = Text::from(vec![
+            let mut lines = vec![
                 Line::from(format!("Kill session '{}'", session_name)),
                 Line::from("AND delete worktree at:"),
                 Line::styled(format!("  {}", worktree_path), Style::default().fg(Color::Yellow)),
@@ -568,11 +573,19 @@ fn render_confirm_action(frame: &mut Frame, app: &App) {
                     "⚠ This will permanently delete the directory!",
                     Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
                 ),
-                Line::raw(""),
-                Line::from("[Y]es  [n]o"),
-            ]);
+            ];
 
-            let paragraph = Paragraph::new(text)
+            if is_current_session {
+                lines.push(Line::styled(
+                    "⚠ This is your current session - tmux will exit!",
+                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                ));
+            }
+
+            lines.push(Line::raw(""));
+            lines.push(Line::from("[Y]es  [n]o"));
+
+            let paragraph = Paragraph::new(Text::from(lines))
                 .block(block)
                 .alignment(Alignment::Center)
                 .wrap(Wrap { trim: true });
@@ -615,7 +628,8 @@ fn render_confirm_action(frame: &mut Frame, app: &App) {
             frame.render_widget(paragraph, area);
         }
         Some(SessionAction::MergePullRequestAndClose) => {
-            let area = centered_rect(58, 10, frame.area());
+            let dialog_height = if is_current_session { 12 } else { 10 };
+            let area = centered_rect(58, dialog_height, frame.area());
 
             let block = Block::default()
                 .title(" Merge PR + Close ")
@@ -638,6 +652,15 @@ fn render_confirm_action(frame: &mut Frame, app: &App) {
                 format!("  • Kill session '{}'", session_name),
                 Style::default().fg(Color::Red),
             ));
+
+            if is_current_session {
+                lines.push(Line::raw(""));
+                lines.push(Line::styled(
+                    "⚠ This is your current session - tmux will exit!",
+                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                ));
+            }
+
             lines.push(Line::raw(""));
             lines.push(Line::from("[Y]es  [n]o"));
 
@@ -650,15 +673,34 @@ fn render_confirm_action(frame: &mut Frame, app: &App) {
             frame.render_widget(paragraph, area);
         }
         Some(action) => {
-            let area = centered_rect(50, 5, frame.area());
+            // Check if this action kills a session (currently only Kill action reaches here)
+            let kills_session = matches!(action, SessionAction::Kill);
+            let show_exit_warning = kills_session && is_current_session;
+
+            let dialog_height = if show_exit_warning { 7 } else { 5 };
+            let area = centered_rect(55, dialog_height, frame.area());
 
             let block = Block::default()
                 .title(" Confirm ")
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(Color::Red));
 
-            let text = format!("{} '{}'?\n\n[Y]es  [n]o", action.label(), session_name);
-            let paragraph = Paragraph::new(text)
+            let mut lines = vec![
+                Line::from(format!("{} '{}'?", action.label(), session_name)),
+            ];
+
+            if show_exit_warning {
+                lines.push(Line::raw(""));
+                lines.push(Line::styled(
+                    "⚠ This is your current session - tmux will exit!",
+                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                ));
+            }
+
+            lines.push(Line::raw(""));
+            lines.push(Line::from("[Y]es  [n]o"));
+
+            let paragraph = Paragraph::new(Text::from(lines))
                 .block(block)
                 .alignment(Alignment::Center)
                 .wrap(Wrap { trim: true });
