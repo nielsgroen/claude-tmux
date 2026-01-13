@@ -84,6 +84,8 @@ pub enum SessionAction {
     Push,
     /// Push and set upstream branch
     PushSetUpstream,
+    /// Fetch from remote (update tracking branches)
+    Fetch,
     /// Pull commits from remote
     Pull,
     /// Create a pull request
@@ -113,6 +115,7 @@ impl SessionAction {
             Self::Commit => "Commit staged changes",
             Self::Push => "Push to remote",
             Self::PushSetUpstream => "Push and set upstream",
+            Self::Fetch => "Fetch from remote",
             Self::Pull => "Pull from remote",
             Self::CreatePullRequest => "Create pull request",
             Self::ViewPullRequest => "View pull request",
@@ -423,6 +426,17 @@ impl App {
                         self.message = Some("Pushed and set upstream".to_string());
                     }
                     Err(e) => self.error = Some(format!("Push failed: {}", e)),
+                }
+                self.mode = Mode::Normal;
+            }
+            SessionAction::Fetch => {
+                let path = session.working_directory.clone();
+                match GitContext::fetch(&path) {
+                    Ok(_) => {
+                        self.refresh_sessions();
+                        self.message = Some("Fetched from remote".to_string());
+                    }
+                    Err(e) => self.error = Some(format!("Fetch failed: {}", e)),
                 }
                 self.mode = Mode::Normal;
             }
@@ -988,6 +1002,11 @@ impl App {
             // Commit: if there are staged changes
             if git.has_staged {
                 actions.push(SessionAction::Commit);
+            }
+
+            // Fetch: always available if there's a remote (safe operation)
+            if git.has_remote {
+                actions.push(SessionAction::Fetch);
             }
 
             if git.has_upstream {

@@ -558,6 +558,33 @@ impl GitContext {
         Ok(())
     }
 
+    /// Fetch from the remote without merging (updates remote tracking branches)
+    pub fn fetch(path: &Path) -> Result<()> {
+        let repo = Repository::discover(path).context("Failed to open repository")?;
+
+        // Find the first remote (usually "origin")
+        let remotes = repo.remotes().context("Failed to list remotes")?;
+        let remote_name = remotes
+            .get(0)
+            .ok_or_else(|| anyhow::anyhow!("No remotes configured"))?;
+
+        let mut remote = repo
+            .find_remote(remote_name)
+            .context("Failed to find remote")?;
+
+        let callbacks = Self::create_callbacks();
+        let mut fetch_options = FetchOptions::new();
+        fetch_options.remote_callbacks(callbacks);
+        fetch_options.download_tags(AutotagOption::Auto);
+
+        // Fetch all branches from the remote
+        remote
+            .fetch(&[] as &[&str], Some(&mut fetch_options), None)
+            .context("Fetch failed")?;
+
+        Ok(())
+    }
+
     /// Pull (fetch + fast-forward merge) from upstream using libgit2
     pub fn pull(path: &Path) -> Result<()> {
         let repo = Repository::discover(path).context("Failed to open repository")?;
