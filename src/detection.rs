@@ -5,7 +5,7 @@ pub fn detect_status(content: &str) -> ClaudeCodeStatus {
     // Step 1: Detect input field by its visual structure
     if has_input_field(content) {
         // Step 2: Check if interruptable
-        if content.contains("ctrl+c to interrupt") {
+        if content.contains("ctrl+c") && content.contains("to interrupt") {
             return ClaudeCodeStatus::Working;
         }
         return ClaudeCodeStatus::Idle;
