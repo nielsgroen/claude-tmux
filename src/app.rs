@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 
-use crate::git::GitContext;
+use crate::git::{self, GitContext, PullRequestInfo};
 use crate::session::Session;
 use crate::tmux::Tmux;
 
@@ -52,6 +52,17 @@ pub enum Mode {
         /// Currently selected path suggestion index
         path_selected: Option<usize>,
     },
+    /// Creating a pull request
+    CreatePullRequest {
+        /// PR title
+        title: String,
+        /// PR body/description
+        body: String,
+        /// Base branch to merge into
+        base_branch: String,
+        /// Which field is active
+        field: CreatePullRequestField,
+    },
     /// Showing help
     Help,
 }
@@ -75,6 +86,16 @@ pub enum SessionAction {
     PushSetUpstream,
     /// Pull commits from remote
     Pull,
+    /// Create a pull request
+    CreatePullRequest,
+    /// View pull request in browser
+    ViewPullRequest,
+    /// Close pull request without merging
+    ClosePullRequest,
+    /// Merge pull request
+    MergePullRequest,
+    /// Merge PR, delete branch, remove worktree, kill session
+    MergePullRequestAndClose,
     /// Kill this session
     Kill,
     /// Kill session and delete its worktree
@@ -93,6 +114,11 @@ impl SessionAction {
             Self::Push => "Push to remote",
             Self::PushSetUpstream => "Push and set upstream",
             Self::Pull => "Pull from remote",
+            Self::CreatePullRequest => "Create pull request",
+            Self::ViewPullRequest => "View pull request",
+            Self::ClosePullRequest => "Close pull request",
+            Self::MergePullRequest => "Merge pull request",
+            Self::MergePullRequestAndClose => "Merge PR + close session",
             Self::Kill => "Kill session",
             Self::KillAndDeleteWorktree => "Kill session + delete worktree",
         }
@@ -100,7 +126,14 @@ impl SessionAction {
 
     /// Whether this action requires confirmation
     pub fn requires_confirmation(&self) -> bool {
-        matches!(self, Self::Kill | Self::KillAndDeleteWorktree)
+        matches!(
+            self,
+            Self::Kill
+                | Self::KillAndDeleteWorktree
+                | Self::ClosePullRequest
+                | Self::MergePullRequest
+                | Self::MergePullRequestAndClose
+        )
     }
 }
 
@@ -117,6 +150,14 @@ pub enum NewWorktreeField {
     Branch,
     Path,
     SessionName,
+}
+
+/// Which field is active in the create pull request dialog
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CreatePullRequestField {
+    Title,
+    Body,
+    BaseBranch,
 }
 
 /// Main application state
@@ -145,6 +186,8 @@ pub struct App {
     pub selected_action: usize,
     /// Action pending confirmation
     pub pending_action: Option<SessionAction>,
+    /// PR info for the selected session (computed when entering action menu)
+    pub pr_info: Option<PullRequestInfo>,
 }
 
 impl App {
@@ -166,6 +209,7 @@ impl App {
             available_actions: Vec::new(),
             selected_action: 0,
             pending_action: None,
+            pr_info: None,
         };
 
         app.update_preview();
@@ -390,6 +434,88 @@ impl App {
                         self.message = Some("Pulled from remote".to_string());
                     }
                     Err(e) => self.error = Some(format!("Pull failed: {}", e)),
+                }
+                self.mode = Mode::Normal;
+            }
+            SessionAction::CreatePullRequest => {
+                // Enter create PR mode
+                self.start_create_pull_request();
+            }
+            SessionAction::ViewPullRequest => {
+                let path = session.working_directory.clone();
+                match git::view_pull_request(&path) {
+                    Ok(_) => {
+                        self.message = Some("Opened PR in browser".to_string());
+                    }
+                    Err(e) => self.error = Some(format!("Failed to open PR: {}", e)),
+                }
+                self.mode = Mode::Normal;
+            }
+            SessionAction::ClosePullRequest => {
+                let path = session.working_directory.clone();
+                match git::close_pull_request(&path) {
+                    Ok(_) => {
+                        self.message = Some("Closed pull request".to_string());
+                    }
+                    Err(e) => self.error = Some(format!("Failed to close PR: {}", e)),
+                }
+                self.mode = Mode::Normal;
+            }
+            SessionAction::MergePullRequest => {
+                let path = session.working_directory.clone();
+                match git::merge_pull_request(&path, false) {
+                    Ok(_) => {
+                        self.refresh_sessions();
+                        self.message = Some("Merged pull request".to_string());
+                    }
+                    Err(e) => self.error = Some(format!("Failed to merge PR: {}", e)),
+                }
+                self.mode = Mode::Normal;
+            }
+            SessionAction::MergePullRequestAndClose => {
+                let path = session.working_directory.clone();
+                let is_worktree = session
+                    .git_context
+                    .as_ref()
+                    .map(|g| g.is_worktree)
+                    .unwrap_or(false);
+
+                // Step 1: Merge PR and delete remote branch
+                match git::merge_pull_request(&path, true) {
+                    Ok(_) => {
+                        // Step 2: Delete worktree if applicable
+                        if is_worktree {
+                            if let Err(e) = GitContext::delete_worktree(&path, true) {
+                                self.error =
+                                    Some(format!("PR merged but failed to delete worktree: {}", e));
+                                self.mode = Mode::Normal;
+                                return;
+                            }
+                        }
+
+                        // Step 3: Kill the session
+                        match Tmux::kill_session(&session_name) {
+                            Ok(_) => {
+                                self.refresh_sessions();
+                                self.message = Some(format!(
+                                    "Merged PR, deleted branch{}",
+                                    if is_worktree {
+                                        ", removed worktree, and closed session"
+                                    } else {
+                                        " and closed session"
+                                    }
+                                ));
+                            }
+                            Err(e) => {
+                                self.refresh_sessions();
+                                self.error = Some(format!(
+                                    "PR merged but failed to kill session: {}",
+                                    e
+                                ));
+                            }
+                        }
+                    }
+                    Err(e) => self.error = Some(format!("Failed to merge PR: {}", e)),
                 }
                 self.mode = Mode::Normal;
             }
@@ -742,6 +868,60 @@ impl App {
         self.mode = Mode::Normal;
     }
 
+    /// Start the create pull request flow
+    pub fn start_create_pull_request(&mut self) {
+        self.clear_messages();
+        let Some(session) = self.selected_session() else {
+            return;
+        };
+
+        let path = &session.working_directory;
+        let base_branch = git::get_default_branch(path).unwrap_or_else(|| "main".to_string());
+
+        self.mode = Mode::CreatePullRequest {
+            title: String::new(),
+            body: String::new(),
+            base_branch,
+            field: CreatePullRequestField::Title,
+        };
+    }
+
+    /// Confirm and execute PR creation
+    pub fn confirm_create_pull_request(&mut self) {
+        let (title, body, base_branch) = if let Mode::CreatePullRequest {
+            ref title,
+            ref body,
+            ref base_branch,
+            ..
+        } = self.mode
+        {
+            (title.clone(), body.clone(), base_branch.clone())
+        } else {
+            self.mode = Mode::Normal;
+            return;
+        };
+
+        if title.trim().is_empty() {
+            self.error = Some("PR title cannot be empty".to_string());
+            self.mode = Mode::Normal;
+            return;
+        }
+
+        if let Some(session) = self.selected_session() {
+            let path = session.working_directory.clone();
+            match git::create_pull_request(&path, &title, &body, &base_branch) {
+                Ok(result) => {
+                    self.message = Some(format!("Created PR: {}", result.url));
+                }
+                Err(e) => {
+                    self.error = Some(format!("Failed to create PR: {}", e));
+                }
+            }
+        }
+
+        self.mode = Mode::Normal;
+    }
+
     /// Start filter mode
     pub fn start_filter(&mut self) {
         self.clear_messages();
@@ -774,8 +954,17 @@ impl App {
 
     /// Compute available actions for the selected session
     fn compute_actions(&mut self) {
-        let Some(session) = self.selected_session() else {
+        // Extract data we need from the session first to avoid borrow conflicts
+        let session_data = self.selected_session().map(|s| {
+            (
+                s.working_directory.clone(),
+                s.git_context.clone(),
+            )
+        });
+
+        let Some((working_dir, git_context)) = session_data else {
             self.available_actions = vec![];
+            self.pr_info = None;
             return;
         };
 
@@ -784,8 +973,11 @@ impl App {
             SessionAction::Rename,
         ];
 
+        // Reset PR info
+        self.pr_info = None;
+
         // Add git actions if applicable
-        if let Some(ref git) = session.git_context {
+        if let Some(ref git) = git_context {
             // New worktree: available for any git repo
             actions.push(SessionAction::NewWorktree);
 
@@ -807,6 +999,33 @@ impl App {
                 if git.behind > 0 && !git.is_dirty() {
                     actions.push(SessionAction::Pull);
                 }
+
+                // PR actions: upstream exists, gh available, GitHub remote, not on default branch
+                if git::is_gh_available() && git::is_github_remote(&working_dir) {
+                    // Check if not on default branch
+                    if let Some(default_branch) = git::get_default_branch(&working_dir) {
+                        if git.branch != default_branch {
+                            // Check if PR already exists for this branch
+                            let pr_info = git::get_pull_request_info(&working_dir);
+                            if let Some(ref info) = pr_info {
+                                if info.state == "OPEN" {
+                                    actions.push(SessionAction::ViewPullRequest);
+                                    actions.push(SessionAction::ClosePullRequest);
+                                    actions.push(SessionAction::MergePullRequest);
+                                    actions.push(SessionAction::MergePullRequestAndClose);
+                                } else {
+                                    // PR exists but is CLOSED or MERGED - can create a new one
+                                    actions.push(SessionAction::CreatePullRequest);
+                                }
+                            } else {
+                                // No PR exists, offer to create one
+                                actions.push(SessionAction::CreatePullRequest);
+                            }
+                            // Store PR info for UI display
+                            self.pr_info = pr_info;
+                        }
+                    }
+                }
             } else if git.has_remote {
                 // No upstream but remote exists - offer to push and set upstream
                 actions.push(SessionAction::PushSetUpstream);
@@ -816,7 +1035,7 @@ impl App {
         actions.push(SessionAction::Kill);
 
         // Add worktree deletion option if this is a worktree
-        if let Some(ref git) = session.git_context {
+        if let Some(ref git) = git_context {
             if git.is_worktree {
                 actions.push(SessionAction::KillAndDeleteWorktree);
             }
@@ -870,6 +1089,7 @@ impl App {
     /// Cancel current mode and return to normal
     pub fn cancel(&mut self) {
         self.pending_action = None;
+        self.pr_info = None;
         self.mode = Mode::Normal;
     }
 
