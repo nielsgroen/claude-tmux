@@ -1,6 +1,6 @@
 [package]
 name = "claude-tmux"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 description = "TUI for managing Claude Code tmux sessions"
 license = "AGPL-3.0-only"
