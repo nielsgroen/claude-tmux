@@ -18,9 +18,6 @@ Add the following line to your `~/.tmux.conf`:
 bind-key C-c display-popup -E -w 80 -h 30 "~/.cargo/bin/claude-tmux"
 ```
 
-Reload your tmux configuration.
-Press `Ctrl-b, Ctrl-c` to open claude-tmux from any tmux session.
-
 ### Build from source
 
 ```bash
@@ -34,6 +31,8 @@ Add this to your `~/.tmux.conf` to bind claude-tmux to a key:
 ```bash
 bind-key C-c display-popup -E -w 80 -h 30 "/path/to/claude-tmux"
 ```
+
+### How to use
 
 Reload your tmux configuration.
 Press `Ctrl-b, Ctrl-c` to open claude-tmux from any tmux session.
