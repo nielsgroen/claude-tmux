@@ -27,6 +27,8 @@ pub struct PullRequestInfo {
     pub url: String,
     /// PR state (OPEN, CLOSED, MERGED)
     pub state: String,
+    /// Whether the PR is mergeable (MERGEABLE, CONFLICTING, UNKNOWN)
+    pub mergeable: String,
 }
 
 /// Check if the GitHub CLI (gh) is available and authenticated.
@@ -144,7 +146,7 @@ pub fn get_pull_request_info(path: &Path) -> Option<PullRequestInfo> {
 
     let output = Command::new("gh")
         .current_dir(path)
-        .args(["pr", "view", "--json", "number,url,state"])
+        .args(["pr", "view", "--json", "number,url,state,mergeable"])
         .output()
         .ok()?;
 
@@ -155,12 +157,13 @@ pub fn get_pull_request_info(path: &Path) -> Option<PullRequestInfo> {
     let json_str = String::from_utf8_lossy(&output.stdout);
 
     // Simple JSON parsing without adding a dependency
-    // Format: {"number":123,"url":"https://...","state":"OPEN"}
+    // Format: {"number":123,"url":"https://...","state":"OPEN","mergeable":"MERGEABLE"}
     let number = extract_json_u64(&json_str, "number")?;
     let url = extract_json_string(&json_str, "url")?;
     let state = extract_json_string(&json_str, "state")?;
+    let mergeable = extract_json_string(&json_str, "mergeable").unwrap_or_else(|| "UNKNOWN".to_string());
 
-    Some(PullRequestInfo { number, url, state })
+    Some(PullRequestInfo { number, url, state, mergeable })
 }
 
 /// Open the PR for the current branch in the browser
