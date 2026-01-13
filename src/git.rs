@@ -27,6 +27,8 @@ pub struct PullRequestInfo {
     pub url: String,
     /// PR state (OPEN, CLOSED, MERGED)
     pub state: String,
+    /// Whether the PR is mergeable (MERGEABLE, CONFLICTING, UNKNOWN)
+    pub mergeable: String,
 }
 
 /// Check if the GitHub CLI (gh) is available and authenticated.
@@ -144,7 +146,7 @@ pub fn get_pull_request_info(path: &Path) -> Option<PullRequestInfo> {
 
     let output = Command::new("gh")
         .current_dir(path)
-        .args(["pr", "view", "--json", "number,url,state"])
+        .args(["pr", "view", "--json", "number,url,state,mergeable"])
         .output()
         .ok()?;
 
@@ -155,12 +157,13 @@ pub fn get_pull_request_info(path: &Path) -> Option<PullRequestInfo> {
     let json_str = String::from_utf8_lossy(&output.stdout);
 
     // Simple JSON parsing without adding a dependency
-    // Format: {"number":123,"url":"https://...","state":"OPEN"}
+    // Format: {"number":123,"url":"https://...","state":"OPEN","mergeable":"MERGEABLE"}
     let number = extract_json_u64(&json_str, "number")?;
     let url = extract_json_string(&json_str, "url")?;
     let state = extract_json_string(&json_str, "state")?;
+    let mergeable = extract_json_string(&json_str, "mergeable").unwrap_or_else(|| "UNKNOWN".to_string());
 
-    Some(PullRequestInfo { number, url, state })
+    Some(PullRequestInfo { number, url, state, mergeable })
 }
 
 /// Open the PR for the current branch in the browser
@@ -204,6 +207,26 @@ pub fn merge_pull_request(path: &Path, delete_branch: bool) -> Result<()> {
     } else {
         let stderr = String::from_utf8_lossy(&output.stderr);
         anyhow::bail!("gh pr merge failed: {}", stderr.trim())
+    }
+}
+
+/// Close the PR for the current branch without merging
+pub fn close_pull_request(path: &Path) -> Result<()> {
+    if !is_gh_available() {
+        anyhow::bail!("GitHub CLI (gh) is not available or not authenticated");
+    }
+
+    let output = Command::new("gh")
+        .current_dir(path)
+        .args(["pr", "close"])
+        .output()
+        .context("Failed to execute gh pr close")?;
+
+    if output.status.success() {
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("gh pr close failed: {}", stderr.trim())
     }
 }
 

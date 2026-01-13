@@ -314,6 +314,41 @@ fn render_session_list(frame: &mut Frame, app: &App, area: Rect) {
                 }
 
                 items.push(ListItem::new(Line::from(git_spans)));
+
+                // PR status row (if available)
+                if let Some(ref pr_info) = app.pr_info {
+                    let mut pr_spans = vec![
+                        Span::raw("     "),
+                        Span::styled("PR #", label_style),
+                        Span::styled(
+                            format!("{}", pr_info.number),
+                            Style::default().fg(Color::Cyan),
+                        ),
+                        Span::raw(": "),
+                    ];
+
+                    // State with color
+                    let (state_text, state_color) = match pr_info.state.as_str() {
+                        "OPEN" => ("open", Color::Green),
+                        "CLOSED" => ("closed", Color::Red),
+                        "MERGED" => ("merged", Color::Magenta),
+                        _ => (pr_info.state.as_str(), Color::Gray),
+                    };
+                    pr_spans.push(Span::styled(state_text, Style::default().fg(state_color)));
+
+                    // Mergeable status (only show for open PRs)
+                    if pr_info.state == "OPEN" {
+                        pr_spans.push(Span::raw("  "));
+                        let (merge_text, merge_color) = match pr_info.mergeable.as_str() {
+                            "MERGEABLE" => ("ready to merge", Color::Green),
+                            "CONFLICTING" => ("has conflicts", Color::Red),
+                            _ => ("merge status unknown", Color::Yellow),
+                        };
+                        pr_spans.push(Span::styled(merge_text, Style::default().fg(merge_color)));
+                    }
+
+                    items.push(ListItem::new(Line::from(pr_spans)));
+                }
             }
 
             // Separator
@@ -505,6 +540,23 @@ fn render_confirm_action(frame: &mut Frame, app: &App) {
                 Line::from("[Y]es  [n]o"),
             ]);
 
+            let paragraph = Paragraph::new(text)
+                .block(block)
+                .alignment(Alignment::Center)
+                .wrap(Wrap { trim: true });
+
+            frame.render_widget(Clear, area);
+            frame.render_widget(paragraph, area);
+        }
+        Some(SessionAction::ClosePullRequest) => {
+            let area = centered_rect(50, 5, frame.area());
+
+            let block = Block::default()
+                .title(" Close Pull Request ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Yellow));
+
+            let text = "Close this pull request without merging?\n\n[Y]es  [n]o";
             let paragraph = Paragraph::new(text)
                 .block(block)
                 .alignment(Alignment::Center)

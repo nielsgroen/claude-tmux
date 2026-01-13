@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 
-use crate::git::{self, GitContext};
+use crate::git::{self, GitContext, PullRequestInfo};
 use crate::session::Session;
 use crate::tmux::Tmux;
 
@@ -78,6 +78,8 @@ pub enum SessionAction {
     CreatePullRequest,
     /// View pull request in browser
     ViewPullRequest,
+    /// Close pull request without merging
+    ClosePullRequest,
     /// Merge pull request
     MergePullRequest,
     /// Merge PR, delete branch, remove worktree, kill session
@@ -102,6 +104,7 @@ impl SessionAction {
             Self::Pull => "Pull from remote",
             Self::CreatePullRequest => "Create pull request",
             Self::ViewPullRequest => "View pull request",
+            Self::ClosePullRequest => "Close pull request",
             Self::MergePullRequest => "Merge pull request",
             Self::MergePullRequestAndClose => "Merge PR + close session",
             Self::Kill => "Kill session",
@@ -115,6 +118,7 @@ impl SessionAction {
             self,
             Self::Kill
                 | Self::KillAndDeleteWorktree
+                | Self::ClosePullRequest
                 | Self::MergePullRequest
                 | Self::MergePullRequestAndClose
         )
@@ -170,6 +174,8 @@ pub struct App {
     pub selected_action: usize,
     /// Action pending confirmation
     pub pending_action: Option<SessionAction>,
+    /// PR info for the selected session (computed when entering action menu)
+    pub pr_info: Option<PullRequestInfo>,
 }
 
 impl App {
@@ -191,6 +197,7 @@ impl App {
             available_actions: Vec::new(),
             selected_action: 0,
             pending_action: None,
+            pr_info: None,
         };
 
         app.update_preview();
@@ -429,6 +436,16 @@ impl App {
                         self.message = Some("Opened PR in browser".to_string());
                     }
                     Err(e) => self.error = Some(format!("Failed to open PR: {}", e)),
+                }
+                self.mode = Mode::Normal;
+            }
+            SessionAction::ClosePullRequest => {
+                let path = session.working_directory.clone();
+                match git::close_pull_request(&path) {
+                    Ok(_) => {
+                        self.message = Some("Closed pull request".to_string());
+                    }
+                    Err(e) => self.error = Some(format!("Failed to close PR: {}", e)),
                 }
                 self.mode = Mode::Normal;
             }
@@ -918,8 +935,17 @@ impl App {
 
     /// Compute available actions for the selected session
     fn compute_actions(&mut self) {
-        let Some(session) = self.selected_session() else {
+        // Extract data we need from the session first to avoid borrow conflicts
+        let session_data = self.selected_session().map(|s| {
+            (
+                s.working_directory.clone(),
+                s.git_context.clone(),
+            )
+        });
+
+        let Some((working_dir, git_context)) = session_data else {
             self.available_actions = vec![];
+            self.pr_info = None;
             return;
         };
 
@@ -928,8 +954,11 @@ impl App {
             SessionAction::Rename,
         ];
 
+        // Reset PR info
+        self.pr_info = None;
+
         // Add git actions if applicable
-        if let Some(ref git) = session.git_context {
+        if let Some(ref git) = git_context {
             // New worktree: available for any git repo
             actions.push(SessionAction::NewWorktree);
 
@@ -953,15 +982,16 @@ impl App {
                 }
 
                 // PR actions: upstream exists, gh available, GitHub remote, not on default branch
-                let path = &session.working_directory;
-                if git::is_gh_available() && git::is_github_remote(path) {
+                if git::is_gh_available() && git::is_github_remote(&working_dir) {
                     // Check if not on default branch
-                    if let Some(default_branch) = git::get_default_branch(path) {
+                    if let Some(default_branch) = git::get_default_branch(&working_dir) {
                         if git.branch != default_branch {
                             // Check if PR already exists for this branch
-                            if let Some(pr_info) = git::get_pull_request_info(path) {
-                                if pr_info.state == "OPEN" {
+                            let pr_info = git::get_pull_request_info(&working_dir);
+                            if let Some(ref info) = pr_info {
+                                if info.state == "OPEN" {
                                     actions.push(SessionAction::ViewPullRequest);
+                                    actions.push(SessionAction::ClosePullRequest);
                                     actions.push(SessionAction::MergePullRequest);
                                     actions.push(SessionAction::MergePullRequestAndClose);
                                 } else {
@@ -972,6 +1002,8 @@ impl App {
                                 // No PR exists, offer to create one
                                 actions.push(SessionAction::CreatePullRequest);
                             }
+                            // Store PR info for UI display
+                            self.pr_info = pr_info;
                         }
                     }
                 }
@@ -984,7 +1016,7 @@ impl App {
         actions.push(SessionAction::Kill);
 
         // Add worktree deletion option if this is a worktree
-        if let Some(ref git) = session.git_context {
+        if let Some(ref git) = git_context {
             if git.is_worktree {
                 actions.push(SessionAction::KillAndDeleteWorktree);
             }
@@ -1038,6 +1070,7 @@ impl App {
     /// Cancel current mode and return to normal
     pub fn cancel(&mut self) {
         self.pending_action = None;
+        self.pr_info = None;
         self.mode = Mode::Normal;
     }
 
