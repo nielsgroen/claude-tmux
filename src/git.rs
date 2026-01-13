@@ -207,6 +207,26 @@ pub fn merge_pull_request(path: &Path, delete_branch: bool) -> Result<()> {
     }
 }
 
+/// Close the PR for the current branch without merging
+pub fn close_pull_request(path: &Path) -> Result<()> {
+    if !is_gh_available() {
+        anyhow::bail!("GitHub CLI (gh) is not available or not authenticated");
+    }
+
+    let output = Command::new("gh")
+        .current_dir(path)
+        .args(["pr", "close"])
+        .output()
+        .context("Failed to execute gh pr close")?;
+
+    if output.status.success() {
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("gh pr close failed: {}", stderr.trim())
+    }
+}
+
 /// Simple helper to extract a string value from JSON
 fn extract_json_string(json: &str, key: &str) -> Option<String> {
     let pattern = format!("\"{}\":\"", key);

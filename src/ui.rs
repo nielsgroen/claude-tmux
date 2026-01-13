@@ -513,6 +513,23 @@ fn render_confirm_action(frame: &mut Frame, app: &App) {
             frame.render_widget(Clear, area);
             frame.render_widget(paragraph, area);
         }
+        Some(SessionAction::ClosePullRequest) => {
+            let area = centered_rect(50, 5, frame.area());
+
+            let block = Block::default()
+                .title(" Close Pull Request ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Yellow));
+
+            let text = "Close this pull request without merging?\n\n[Y]es  [n]o";
+            let paragraph = Paragraph::new(text)
+                .block(block)
+                .alignment(Alignment::Center)
+                .wrap(Wrap { trim: true });
+
+            frame.render_widget(Clear, area);
+            frame.render_widget(paragraph, area);
+        }
         Some(SessionAction::MergePullRequest) => {
             let area = centered_rect(50, 5, frame.area());
 

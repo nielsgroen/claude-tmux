@@ -78,6 +78,8 @@ pub enum SessionAction {
     CreatePullRequest,
     /// View pull request in browser
     ViewPullRequest,
+    /// Close pull request without merging
+    ClosePullRequest,
     /// Merge pull request
     MergePullRequest,
     /// Merge PR, delete branch, remove worktree, kill session
@@ -102,6 +104,7 @@ impl SessionAction {
             Self::Pull => "Pull from remote",
             Self::CreatePullRequest => "Create pull request",
             Self::ViewPullRequest => "View pull request",
+            Self::ClosePullRequest => "Close pull request",
             Self::MergePullRequest => "Merge pull request",
             Self::MergePullRequestAndClose => "Merge PR + close session",
             Self::Kill => "Kill session",
@@ -115,6 +118,7 @@ impl SessionAction {
             self,
             Self::Kill
                 | Self::KillAndDeleteWorktree
+                | Self::ClosePullRequest
                 | Self::MergePullRequest
                 | Self::MergePullRequestAndClose
         )
@@ -429,6 +433,16 @@ impl App {
                         self.message = Some("Opened PR in browser".to_string());
                     }
                     Err(e) => self.error = Some(format!("Failed to open PR: {}", e)),
+                }
+                self.mode = Mode::Normal;
+            }
+            SessionAction::ClosePullRequest => {
+                let path = session.working_directory.clone();
+                match git::close_pull_request(&path) {
+                    Ok(_) => {
+                        self.message = Some("Closed pull request".to_string());
+                    }
+                    Err(e) => self.error = Some(format!("Failed to close PR: {}", e)),
                 }
                 self.mode = Mode::Normal;
             }
@@ -962,6 +976,7 @@ impl App {
                             if let Some(pr_info) = git::get_pull_request_info(path) {
                                 if pr_info.state == "OPEN" {
                                     actions.push(SessionAction::ViewPullRequest);
+                                    actions.push(SessionAction::ClosePullRequest);
                                     actions.push(SessionAction::MergePullRequest);
                                     actions.push(SessionAction::MergePullRequestAndClose);
                                 } else {
