@@ -474,64 +474,116 @@ fn render_confirm_action(frame: &mut Frame, app: &App) {
 
     let session = app.selected_session();
     let session_name = session.map(|s| s.name.as_str()).unwrap_or("?");
+    let is_worktree = session
+        .and_then(|s| s.git_context.as_ref())
+        .map(|g| g.is_worktree)
+        .unwrap_or(false);
 
-    let action_desc = app
-        .pending_action
-        .as_ref()
-        .map(|a| a.label())
-        .unwrap_or("Perform action");
+    match &app.pending_action {
+        Some(SessionAction::KillAndDeleteWorktree) => {
+            let worktree_path = session
+                .map(|s| s.display_path())
+                .unwrap_or_else(|| "?".to_string());
 
-    // Check if this is a worktree deletion to show enhanced dialog
-    let is_worktree_delete = matches!(app.pending_action, Some(SessionAction::KillAndDeleteWorktree));
+            let area = centered_rect(55, 9, frame.area());
 
-    if is_worktree_delete {
-        let worktree_path = session
-            .map(|s| s.display_path())
-            .unwrap_or_else(|| "?".to_string());
+            let block = Block::default()
+                .title(" Confirm ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Red));
 
-        let area = centered_rect(55, 9, frame.area());
+            let text = Text::from(vec![
+                Line::from(format!("Kill session '{}'", session_name)),
+                Line::from("AND delete worktree at:"),
+                Line::styled(format!("  {}", worktree_path), Style::default().fg(Color::Yellow)),
+                Line::raw(""),
+                Line::styled(
+                    "⚠ This will permanently delete the directory!",
+                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                ),
+                Line::raw(""),
+                Line::from("[Y]es  [n]o"),
+            ]);
 
-        let block = Block::default()
-            .title(" Confirm ")
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Red));
+            let paragraph = Paragraph::new(text)
+                .block(block)
+                .alignment(Alignment::Center)
+                .wrap(Wrap { trim: true });
 
-        let text = Text::from(vec![
-            Line::from(format!("Kill session '{}'", session_name)),
-            Line::from("AND delete worktree at:"),
-            Line::styled(format!("  {}", worktree_path), Style::default().fg(Color::Yellow)),
-            Line::raw(""),
-            Line::styled(
-                "⚠ This will permanently delete the directory!",
-                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
-            ),
-            Line::raw(""),
-            Line::from("[Y]es  [n]o"),
-        ]);
+            frame.render_widget(Clear, area);
+            frame.render_widget(paragraph, area);
+        }
+        Some(SessionAction::MergePullRequest) => {
+            let area = centered_rect(50, 5, frame.area());
 
-        let paragraph = Paragraph::new(text)
-            .block(block)
-            .alignment(Alignment::Center)
-            .wrap(Wrap { trim: true });
+            let block = Block::default()
+                .title(" Merge Pull Request ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Green));
 
-        frame.render_widget(Clear, area);
-        frame.render_widget(paragraph, area);
-    } else {
-        let area = centered_rect(50, 5, frame.area());
+            let text = "Merge this pull request?\n\n[Y]es  [n]o";
+            let paragraph = Paragraph::new(text)
+                .block(block)
+                .alignment(Alignment::Center)
+                .wrap(Wrap { trim: true });
 
-        let block = Block::default()
-            .title(" Confirm ")
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Red));
+            frame.render_widget(Clear, area);
+            frame.render_widget(paragraph, area);
+        }
+        Some(SessionAction::MergePullRequestAndClose) => {
+            let area = centered_rect(58, 10, frame.area());
 
-        let text = format!("{} '{}'?\n\n[Y]es  [n]o", action_desc, session_name);
-        let paragraph = Paragraph::new(text)
-            .block(block)
-            .alignment(Alignment::Center)
-            .wrap(Wrap { trim: true });
+            let block = Block::default()
+                .title(" Merge PR + Close ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Yellow));
 
-        frame.render_widget(Clear, area);
-        frame.render_widget(paragraph, area);
+            let mut lines = vec![
+                Line::from("This will:"),
+                Line::styled("  • Merge the pull request", Style::default().fg(Color::Green)),
+                Line::styled("  • Delete the remote branch", Style::default().fg(Color::Yellow)),
+            ];
+
+            if is_worktree {
+                lines.push(Line::styled(
+                    "  • Remove the local worktree",
+                    Style::default().fg(Color::Red),
+                ));
+            }
+
+            lines.push(Line::styled(
+                format!("  • Kill session '{}'", session_name),
+                Style::default().fg(Color::Red),
+            ));
+            lines.push(Line::raw(""));
+            lines.push(Line::from("[Y]es  [n]o"));
+
+            let paragraph = Paragraph::new(Text::from(lines))
+                .block(block)
+                .alignment(Alignment::Center)
+                .wrap(Wrap { trim: true });
+
+            frame.render_widget(Clear, area);
+            frame.render_widget(paragraph, area);
+        }
+        Some(action) => {
+            let area = centered_rect(50, 5, frame.area());
+
+            let block = Block::default()
+                .title(" Confirm ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Red));
+
+            let text = format!("{} '{}'?\n\n[Y]es  [n]o", action.label(), session_name);
+            let paragraph = Paragraph::new(text)
+                .block(block)
+                .alignment(Alignment::Center)
+                .wrap(Wrap { trim: true });
+
+            frame.render_widget(Clear, area);
+            frame.render_widget(paragraph, area);
+        }
+        None => {}
     }
 }
 

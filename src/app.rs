@@ -76,6 +76,12 @@ pub enum SessionAction {
     Pull,
     /// Create a pull request
     CreatePullRequest,
+    /// View pull request in browser
+    ViewPullRequest,
+    /// Merge pull request
+    MergePullRequest,
+    /// Merge PR, delete branch, remove worktree, kill session
+    MergePullRequestAndClose,
     /// Kill this session
     Kill,
     /// Kill session and delete its worktree
@@ -95,6 +101,9 @@ impl SessionAction {
             Self::PushSetUpstream => "Push and set upstream",
             Self::Pull => "Pull from remote",
             Self::CreatePullRequest => "Create pull request",
+            Self::ViewPullRequest => "View pull request",
+            Self::MergePullRequest => "Merge pull request",
+            Self::MergePullRequestAndClose => "Merge PR + close session",
             Self::Kill => "Kill session",
             Self::KillAndDeleteWorktree => "Kill session + delete worktree",
         }
@@ -102,7 +111,13 @@ impl SessionAction {
 
     /// Whether this action requires confirmation
     pub fn requires_confirmation(&self) -> bool {
-        matches!(self, Self::Kill | Self::KillAndDeleteWorktree)
+        matches!(
+            self,
+            Self::Kill
+                | Self::KillAndDeleteWorktree
+                | Self::MergePullRequest
+                | Self::MergePullRequestAndClose
+        )
     }
 }
 
@@ -406,6 +421,74 @@ impl App {
             SessionAction::CreatePullRequest => {
                 // Enter create PR mode
                 self.start_create_pull_request();
+            }
+            SessionAction::ViewPullRequest => {
+                let path = session.working_directory.clone();
+                match git::view_pull_request(&path) {
+                    Ok(_) => {
+                        self.message = Some("Opened PR in browser".to_string());
+                    }
+                    Err(e) => self.error = Some(format!("Failed to open PR: {}", e)),
+                }
+                self.mode = Mode::Normal;
+            }
+            SessionAction::MergePullRequest => {
+                let path = session.working_directory.clone();
+                match git::merge_pull_request(&path, false) {
+                    Ok(_) => {
+                        self.refresh_sessions();
+                        self.message = Some("Merged pull request".to_string());
+                    }
+                    Err(e) => self.error = Some(format!("Failed to merge PR: {}", e)),
+                }
+                self.mode = Mode::Normal;
+            }
+            SessionAction::MergePullRequestAndClose => {
+                let path = session.working_directory.clone();
+                let is_worktree = session
+                    .git_context
+                    .as_ref()
+                    .map(|g| g.is_worktree)
+                    .unwrap_or(false);
+
+                // Step 1: Merge PR and delete remote branch
+                match git::merge_pull_request(&path, true) {
+                    Ok(_) => {
+                        // Step 2: Delete worktree if applicable
+                        if is_worktree {
+                            if let Err(e) = GitContext::delete_worktree(&path, true) {
+                                self.error =
+                                    Some(format!("PR merged but failed to delete worktree: {}", e));
+                                self.mode = Mode::Normal;
+                                return;
+                            }
+                        }
+
+                        // Step 3: Kill the session
+                        match Tmux::kill_session(&session_name) {
+                            Ok(_) => {
+                                self.refresh_sessions();
+                                self.message = Some(format!(
+                                    "Merged PR, deleted branch{}",
+                                    if is_worktree {
+                                        ", removed worktree, and closed session"
+                                    } else {
+                                        " and closed session"
+                                    }
+                                ));
+                            }
+                            Err(e) => {
+                                self.refresh_sessions();
+                                self.error = Some(format!(
+                                    "PR merged but failed to kill session: {}",
+                                    e
+                                ));
+                            }
+                        }
+                    }
+                    Err(e) => self.error = Some(format!("Failed to merge PR: {}", e)),
+                }
+                self.mode = Mode::Normal;
             }
             SessionAction::Kill => {
                 match Tmux::kill_session(&session_name) {
@@ -869,13 +952,26 @@ impl App {
                     actions.push(SessionAction::Pull);
                 }
 
-                // Create PR: upstream exists, gh available, GitHub remote, not on default branch
+                // PR actions: upstream exists, gh available, GitHub remote, not on default branch
                 let path = &session.working_directory;
                 if git::is_gh_available() && git::is_github_remote(path) {
                     // Check if not on default branch
                     if let Some(default_branch) = git::get_default_branch(path) {
                         if git.branch != default_branch {
-                            actions.push(SessionAction::CreatePullRequest);
+                            // Check if PR already exists for this branch
+                            if let Some(pr_info) = git::get_pull_request_info(path) {
+                                if pr_info.state == "OPEN" {
+                                    actions.push(SessionAction::ViewPullRequest);
+                                    actions.push(SessionAction::MergePullRequest);
+                                    actions.push(SessionAction::MergePullRequestAndClose);
+                                } else {
+                                    // PR exists but is CLOSED or MERGED - can create a new one
+                                    actions.push(SessionAction::CreatePullRequest);
+                                }
+                            } else {
+                                // No PR exists, offer to create one
+                                actions.push(SessionAction::CreatePullRequest);
+                            }
                         }
                     }
                 }
