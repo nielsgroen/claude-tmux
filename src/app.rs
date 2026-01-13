@@ -18,7 +18,15 @@ pub enum Mode {
     /// Confirming an action (kill, etc.)
     ConfirmAction,
     /// Creating a new session
-    NewSession { name: String, path: String, field: NewSessionField },
+    NewSession {
+        name: String,
+        path: String,
+        field: NewSessionField,
+        /// Path completion suggestions
+        path_suggestions: Vec<String>,
+        /// Currently selected path suggestion index
+        path_selected: Option<usize>,
+    },
     /// Renaming a session
     Rename { old_name: String, new_name: String },
     /// Entering commit message
@@ -39,6 +47,10 @@ pub enum Mode {
         session_name: String,
         /// Which field is active
         field: NewWorktreeField,
+        /// Path completion suggestions
+        path_suggestions: Vec<String>,
+        /// Currently selected path suggestion index
+        path_selected: Option<usize>,
     },
     /// Creating a pull request
     CreatePullRequest {
@@ -598,10 +610,15 @@ impl App {
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_else(|_| "~".to_string());
 
+        // Get initial path suggestions
+        let completion = crate::completion::complete_path(&default_path);
+
         self.mode = Mode::NewSession {
             name: String::new(),
             path: default_path,
             field: NewSessionField::Name,
+            path_suggestions: completion.suggestions,
+            path_selected: None,
         };
     }
 
@@ -670,6 +687,8 @@ impl App {
             worktree_path: String::new(),
             session_name: String::new(),
             field: NewWorktreeField::Branch,
+            path_suggestions: Vec::new(),
+            path_selected: None,
         };
     }
 
@@ -1092,6 +1111,228 @@ impl App {
         }
 
         (working, waiting, idle)
+    }
+
+    // =========================================================================
+    // Path completion methods
+    // =========================================================================
+
+    /// Update path suggestions for NewSession mode
+    pub fn update_new_session_path_suggestions(&mut self) {
+        if let Mode::NewSession {
+            ref path,
+            ref mut path_suggestions,
+            ref mut path_selected,
+            ..
+        } = self.mode
+        {
+            let completion = crate::completion::complete_path(path);
+            *path_suggestions = completion.suggestions;
+            // Reset selection if it's out of bounds
+            if let Some(idx) = *path_selected {
+                if idx >= path_suggestions.len() {
+                    *path_selected = if path_suggestions.is_empty() {
+                        None
+                    } else {
+                        Some(path_suggestions.len() - 1)
+                    };
+                }
+            }
+        }
+    }
+
+    /// Update path suggestions for NewWorktree mode
+    pub fn update_worktree_path_suggestions(&mut self) {
+        if let Mode::NewWorktree {
+            ref worktree_path,
+            ref mut path_suggestions,
+            ref mut path_selected,
+            ..
+        } = self.mode
+        {
+            let completion = crate::completion::complete_path(worktree_path);
+            *path_suggestions = completion.suggestions;
+            // Reset selection if it's out of bounds
+            if let Some(idx) = *path_selected {
+                if idx >= path_suggestions.len() {
+                    *path_selected = if path_suggestions.is_empty() {
+                        None
+                    } else {
+                        Some(path_suggestions.len() - 1)
+                    };
+                }
+            }
+        }
+    }
+
+    /// Select previous path suggestion in NewSession mode
+    pub fn select_prev_new_session_path(&mut self) {
+        if let Mode::NewSession {
+            ref path_suggestions,
+            ref mut path_selected,
+            ..
+        } = self.mode
+        {
+            if path_suggestions.is_empty() {
+                return;
+            }
+            *path_selected = Some(
+                path_selected
+                    .map(|i| if i == 0 { path_suggestions.len() - 1 } else { i - 1 })
+                    .unwrap_or(path_suggestions.len() - 1),
+            );
+        }
+    }
+
+    /// Select next path suggestion in NewSession mode
+    pub fn select_next_new_session_path(&mut self) {
+        if let Mode::NewSession {
+            ref path_suggestions,
+            ref mut path_selected,
+            ..
+        } = self.mode
+        {
+            if path_suggestions.is_empty() {
+                return;
+            }
+            *path_selected = Some(
+                path_selected
+                    .map(|i| (i + 1) % path_suggestions.len())
+                    .unwrap_or(0),
+            );
+        }
+    }
+
+    /// Accept the current path completion in NewSession mode
+    pub fn accept_new_session_path_completion(&mut self) {
+        if let Mode::NewSession {
+            ref mut path,
+            ref path_suggestions,
+            ref mut path_selected,
+            ..
+        } = self.mode
+        {
+            // If a suggestion is selected, use it
+            if let Some(idx) = *path_selected {
+                if let Some(suggestion) = path_suggestions.get(idx) {
+                    *path = suggestion.clone();
+                    *path_selected = None;
+                }
+            } else if let Some(first) = path_suggestions.first() {
+                // Otherwise use the first suggestion (ghost text)
+                *path = first.clone();
+            }
+        }
+        // Update suggestions after accepting
+        self.update_new_session_path_suggestions();
+    }
+
+    /// Select previous path suggestion in NewWorktree mode
+    pub fn select_prev_worktree_path(&mut self) {
+        if let Mode::NewWorktree {
+            ref path_suggestions,
+            ref mut path_selected,
+            ..
+        } = self.mode
+        {
+            if path_suggestions.is_empty() {
+                return;
+            }
+            *path_selected = Some(
+                path_selected
+                    .map(|i| if i == 0 { path_suggestions.len() - 1 } else { i - 1 })
+                    .unwrap_or(path_suggestions.len() - 1),
+            );
+        }
+    }
+
+    /// Select next path suggestion in NewWorktree mode
+    pub fn select_next_worktree_path(&mut self) {
+        if let Mode::NewWorktree {
+            ref path_suggestions,
+            ref mut path_selected,
+            ..
+        } = self.mode
+        {
+            if path_suggestions.is_empty() {
+                return;
+            }
+            *path_selected = Some(
+                path_selected
+                    .map(|i| (i + 1) % path_suggestions.len())
+                    .unwrap_or(0),
+            );
+        }
+    }
+
+    /// Accept the current path completion in NewWorktree mode
+    pub fn accept_worktree_path_completion(&mut self) {
+        if let Mode::NewWorktree {
+            ref mut worktree_path,
+            ref path_suggestions,
+            ref mut path_selected,
+            ..
+        } = self.mode
+        {
+            // If a suggestion is selected, use it
+            if let Some(idx) = *path_selected {
+                if let Some(suggestion) = path_suggestions.get(idx) {
+                    *worktree_path = suggestion.clone();
+                    *path_selected = None;
+                }
+            } else if let Some(first) = path_suggestions.first() {
+                // Otherwise use the first suggestion (ghost text)
+                *worktree_path = first.clone();
+            }
+        }
+        // Update suggestions after accepting
+        self.update_worktree_path_suggestions();
+    }
+
+    /// Accept the current branch completion in NewWorktree mode
+    pub fn accept_branch_completion(&mut self) {
+        let selected_branch_name = if let Mode::NewWorktree {
+            ref all_branches,
+            ref branch_input,
+            selected_branch,
+            ..
+        } = self.mode
+        {
+            // Get filtered branches
+            let filtered: Vec<&str> = if branch_input.is_empty() {
+                all_branches.iter().map(|s| s.as_str()).collect()
+            } else {
+                let input_lower = branch_input.to_lowercase();
+                all_branches
+                    .iter()
+                    .filter(|b| b.to_lowercase().contains(&input_lower))
+                    .map(|s| s.as_str())
+                    .collect()
+            };
+
+            // Get the branch to accept
+            if let Some(idx) = selected_branch {
+                filtered.get(idx).map(|s| s.to_string())
+            } else {
+                filtered.first().map(|s| s.to_string())
+            }
+        } else {
+            None
+        };
+
+        // Now update the branch_input with the selected branch
+        if let Some(branch_name) = selected_branch_name {
+            if let Mode::NewWorktree {
+                ref mut branch_input,
+                ref mut selected_branch,
+                ..
+            } = self.mode
+            {
+                *branch_input = branch_name;
+                *selected_branch = None;
+            }
+            self.update_worktree_suggestions();
+        }
     }
 }
 

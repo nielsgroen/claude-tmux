@@ -40,8 +40,14 @@ pub fn render(frame: &mut Frame, app: &App) {
         Mode::ConfirmAction => {
             render_confirm_action(frame, app);
         }
-        Mode::NewSession { name, path, field } => {
-            render_new_session_dialog(frame, name, path, *field);
+        Mode::NewSession {
+            name,
+            path,
+            field,
+            path_suggestions,
+            path_selected,
+        } => {
+            render_new_session_dialog(frame, name, path, *field, path_suggestions, *path_selected);
         }
         Mode::Rename { old_name, new_name } => {
             render_rename_dialog(frame, old_name, new_name);
@@ -55,6 +61,8 @@ pub fn render(frame: &mut Frame, app: &App) {
             worktree_path,
             session_name,
             field,
+            path_suggestions,
+            path_selected,
             ..
         } => {
             render_new_worktree_dialog(
@@ -65,6 +73,8 @@ pub fn render(frame: &mut Frame, app: &App) {
                 worktree_path,
                 session_name,
                 *field,
+                path_suggestions,
+                *path_selected,
             );
         }
         Mode::Filter { input } => {
@@ -484,11 +494,11 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
         Mode::ActionMenu => "  jk navigate  ⏎/l select  h/esc back  q quit",
         Mode::Filter { .. } => "  ⏎ apply  esc cancel",
         Mode::ConfirmAction => "  y/⏎ confirm  n/esc cancel",
-        Mode::NewSession { .. } => "  ⏎ create  tab switch field  esc cancel",
+        Mode::NewSession { .. } => "  ⏎ create  tab switch  ↑↓ select  → accept  esc cancel",
         Mode::Rename { .. } => "  ⏎ confirm  esc cancel",
         Mode::Commit { .. } => "  ⏎ commit  esc cancel",
-        Mode::NewWorktree { .. } => "  ⏎ create  tab switch field  ↑↓ select branch  esc cancel",
-        Mode::CreatePullRequest { .. } => "  ⏎ create PR  tab switch field  esc cancel",
+        Mode::NewWorktree { .. } => "  ⏎ create  tab switch  ↑↓ select  → accept  esc cancel",
+        Mode::CreatePullRequest { .. } => "  ⏎ create PR  tab switch  esc cancel",
         Mode::Help => "  q close",
     };
 
@@ -639,8 +649,29 @@ fn render_confirm_action(frame: &mut Frame, app: &App) {
     }
 }
 
-fn render_new_session_dialog(frame: &mut Frame, name: &str, path: &str, field: NewSessionField) {
-    let area = centered_rect(60, 8, frame.area());
+fn render_new_session_dialog(
+    frame: &mut Frame,
+    name: &str,
+    path: &str,
+    field: NewSessionField,
+    path_suggestions: &[String],
+    path_selected: Option<usize>,
+) {
+    // Calculate dialog height based on suggestions shown
+    // When suggestions exist, we add: 2 separator lines + suggestions + optional "more" line
+    let suggestions_to_show = if field == NewSessionField::Path && !path_suggestions.is_empty() {
+        path_suggestions.len().min(5)
+    } else {
+        0
+    };
+    let suggestion_extra = if suggestions_to_show > 0 {
+        2 + if path_suggestions.len() > 5 { 1 } else { 0 }  // separators + optional "more"
+    } else {
+        0
+    };
+    let dialog_height = 8 + suggestions_to_show as u16 + suggestion_extra as u16;
+
+    let area = centered_rect(60, dialog_height, frame.area());
 
     let block = Block::default()
         .title(" New Session ")
@@ -659,36 +690,89 @@ fn render_new_session_dialog(frame: &mut Frame, name: &str, path: &str, field: N
         Style::default()
     };
 
-    let text = Text::from(vec![
-        Line::from(vec![
-            Span::styled("Name: ", name_style),
-            Span::raw(name),
-            if field == NewSessionField::Name {
-                Span::raw("_")
-            } else {
-                Span::raw("")
-            },
-        ]),
-        Line::raw(""),
-        Line::from(vec![
-            Span::styled("Path: ", path_style),
-            Span::raw(path),
-            if field == NewSessionField::Path {
-                Span::raw("_")
-            } else {
-                Span::raw("")
-            },
-        ]),
-        Line::raw(""),
-        Line::styled(
-            "Press Enter to create, Tab to switch fields",
-            Style::default().fg(Color::DarkGray),
-        ),
-    ]);
+    let mut lines = Vec::new();
 
+    // Name field
+    lines.push(Line::from(vec![
+        Span::styled("Name: ", name_style),
+        Span::raw(name),
+        if field == NewSessionField::Name {
+            Span::raw("_")
+        } else {
+            Span::raw("")
+        },
+    ]));
+
+    lines.push(Line::raw(""));
+
+    // Path field with ghost text
+    let ghost_text = if field == NewSessionField::Path {
+        crate::completion::complete_path(path).ghost_text
+    } else {
+        None
+    };
+
+    let mut path_spans = vec![
+        Span::styled("Path: ", path_style),
+        Span::styled(path, Style::default().fg(Color::Yellow)),
+    ];
+
+    // Add ghost text (completion suffix)
+    if let Some(ref ghost) = ghost_text {
+        path_spans.push(Span::styled(
+            ghost,
+            Style::default().fg(Color::DarkGray).add_modifier(Modifier::DIM),
+        ));
+    }
+
+    // Add cursor
+    if field == NewSessionField::Path {
+        path_spans.push(Span::raw("_"));
+    }
+
+    lines.push(Line::from(path_spans));
+
+    // Show path suggestions when path field is active
+    if field == NewSessionField::Path && !path_suggestions.is_empty() {
+        lines.push(Line::styled(
+            "      ────────────────────────────────────",
+            Style::default().fg(Color::DarkGray),
+        ));
+
+        for (i, suggestion) in path_suggestions.iter().take(5).enumerate() {
+            let is_selected = path_selected == Some(i);
+            let prefix = if is_selected { "    > " } else { "      " };
+            let style = if is_selected {
+                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::DarkGray)
+            };
+            lines.push(Line::styled(format!("{}{}", prefix, suggestion), style));
+        }
+
+        if path_suggestions.len() > 5 {
+            lines.push(Line::styled(
+                format!("      ... and {} more", path_suggestions.len() - 5),
+                Style::default().fg(Color::DarkGray),
+            ));
+        }
+
+        lines.push(Line::styled(
+            "      ────────────────────────────────────",
+            Style::default().fg(Color::DarkGray),
+        ));
+    }
+
+    lines.push(Line::raw(""));
+    lines.push(Line::styled(
+        "Tab switch  ↑↓ select  → accept  Enter create  Esc cancel",
+        Style::default().fg(Color::DarkGray),
+    ));
+
+    let text = Text::from(lines);
     let paragraph = Paragraph::new(text)
         .block(block)
-        .wrap(Wrap { trim: true });
+        .wrap(Wrap { trim: false });
 
     frame.render_widget(Clear, area);
     frame.render_widget(paragraph, area);
@@ -805,6 +889,8 @@ fn render_new_worktree_dialog(
     worktree_path: &str,
     session_name: &str,
     field: NewWorktreeField,
+    path_suggestions: &[String],
+    path_selected: Option<usize>,
 ) {
     // Get filtered branches
     let filtered_branches = app.filtered_branches();
@@ -812,9 +898,30 @@ fn render_new_worktree_dialog(
         && !branch_input.is_empty()
         && !filtered_branches.contains(&branch_input);
 
-    // Calculate dialog height based on branches shown (max 5)
-    let branches_to_show = filtered_branches.len().min(5);
-    let dialog_height = 10 + branches_to_show as u16;
+    // Calculate dialog height based on suggestions shown
+    // When suggestions exist, we add: 2 separator lines + suggestions + optional "more" line
+    let branches_to_show = if field == NewWorktreeField::Branch && !filtered_branches.is_empty() {
+        filtered_branches.len().min(5)
+    } else {
+        0
+    };
+    let branch_extra = if branches_to_show > 0 {
+        2 + if filtered_branches.len() > 5 { 1 } else { 0 }
+    } else {
+        0
+    };
+    let path_suggestions_to_show = if field == NewWorktreeField::Path && !path_suggestions.is_empty() {
+        path_suggestions.len().min(5)
+    } else {
+        0
+    };
+    let path_extra = if path_suggestions_to_show > 0 {
+        2 + if path_suggestions.len() > 5 { 1 } else { 0 }
+    } else {
+        0
+    };
+    let dialog_height = 10 + branches_to_show as u16 + branch_extra as u16
+        + path_suggestions_to_show as u16 + path_extra as u16;
 
     let area = centered_rect(65, dialog_height, frame.area());
 
@@ -826,7 +933,7 @@ fn render_new_worktree_dialog(
     // Build the content
     let mut lines = Vec::new();
 
-    // Branch field
+    // Branch field with ghost text
     let branch_style = if field == NewWorktreeField::Branch {
         Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
     } else {
@@ -841,16 +948,33 @@ fn render_new_worktree_dialog(
         Span::raw("")
     };
 
-    lines.push(Line::from(vec![
+    // Calculate branch ghost text
+    let branch_ghost = if field == NewWorktreeField::Branch {
+        crate::completion::branch_ghost_text(branch_input, &filtered_branches, selected_branch)
+    } else {
+        None
+    };
+
+    let mut branch_spans = vec![
         Span::styled("Branch:  ", branch_style),
         Span::styled(branch_input, Style::default().fg(Color::Yellow)),
-        if field == NewWorktreeField::Branch {
-            Span::raw("_")
-        } else {
-            Span::raw("")
-        },
-        branch_indicator,
-    ]));
+    ];
+
+    // Add branch ghost text
+    if let Some(ref ghost) = branch_ghost {
+        branch_spans.push(Span::styled(
+            ghost,
+            Style::default().fg(Color::DarkGray).add_modifier(Modifier::DIM),
+        ));
+    }
+
+    // Add cursor
+    if field == NewWorktreeField::Branch {
+        branch_spans.push(Span::raw("_"));
+    }
+
+    branch_spans.push(branch_indicator);
+    lines.push(Line::from(branch_spans));
 
     // Show filtered branches if in branch field
     if field == NewWorktreeField::Branch && !filtered_branches.is_empty() {
@@ -885,22 +1009,70 @@ fn render_new_worktree_dialog(
 
     lines.push(Line::raw(""));
 
-    // Path field
+    // Path field with ghost text
     let path_style = if field == NewWorktreeField::Path {
         Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
     } else {
         Style::default()
     };
 
-    lines.push(Line::from(vec![
+    // Calculate path ghost text
+    let path_ghost = if field == NewWorktreeField::Path {
+        crate::completion::complete_path(worktree_path).ghost_text
+    } else {
+        None
+    };
+
+    let mut path_spans = vec![
         Span::styled("Path:    ", path_style),
         Span::styled(worktree_path, Style::default().fg(Color::Yellow)),
-        if field == NewWorktreeField::Path {
-            Span::raw("_")
-        } else {
-            Span::raw("")
-        },
-    ]));
+    ];
+
+    // Add path ghost text
+    if let Some(ref ghost) = path_ghost {
+        path_spans.push(Span::styled(
+            ghost,
+            Style::default().fg(Color::DarkGray).add_modifier(Modifier::DIM),
+        ));
+    }
+
+    // Add cursor
+    if field == NewWorktreeField::Path {
+        path_spans.push(Span::raw("_"));
+    }
+
+    lines.push(Line::from(path_spans));
+
+    // Show path suggestions when path field is active
+    if field == NewWorktreeField::Path && !path_suggestions.is_empty() {
+        lines.push(Line::styled(
+            "         ────────────────────────────────────",
+            Style::default().fg(Color::DarkGray),
+        ));
+
+        for (i, suggestion) in path_suggestions.iter().take(5).enumerate() {
+            let is_selected = path_selected == Some(i);
+            let prefix = if is_selected { "       > " } else { "         " };
+            let style = if is_selected {
+                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::DarkGray)
+            };
+            lines.push(Line::styled(format!("{}{}", prefix, suggestion), style));
+        }
+
+        if path_suggestions.len() > 5 {
+            lines.push(Line::styled(
+                format!("         ... and {} more", path_suggestions.len() - 5),
+                Style::default().fg(Color::DarkGray),
+            ));
+        }
+
+        lines.push(Line::styled(
+            "         ────────────────────────────────────",
+            Style::default().fg(Color::DarkGray),
+        ));
+    }
 
     lines.push(Line::raw(""));
 
@@ -923,7 +1095,7 @@ fn render_new_worktree_dialog(
 
     lines.push(Line::raw(""));
     lines.push(Line::styled(
-        "[Tab] Next field  [Enter] Create  [Esc] Cancel",
+        "Tab switch  ↑↓ select  → accept  Enter create  Esc cancel",
         Style::default().fg(Color::DarkGray),
     ));
 

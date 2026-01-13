@@ -1,4 +1,5 @@
 mod app;
+mod completion;
 mod detection;
 mod git;
 mod input;
