@@ -603,7 +603,6 @@ fn render_confirm_action(frame: &mut Frame, app: &App) {
             let mut lines = vec![
                 Line::from("This will:"),
                 Line::styled("  • Merge the pull request", Style::default().fg(Color::Green)),
-                Line::styled("  • Delete the remote branch", Style::default().fg(Color::Yellow)),
             ];
 
             if is_worktree {

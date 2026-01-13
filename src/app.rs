@@ -480,8 +480,8 @@ impl App {
                     .map(|g| g.is_worktree)
                     .unwrap_or(false);
 
-                // Step 1: Merge PR and delete remote branch
-                match git::merge_pull_request(&path, true) {
+                // Step 1: Merge PR (never delete branch - user can do that manually if desired)
+                match git::merge_pull_request(&path, false) {
                     Ok(_) => {
                         // Step 2: Delete worktree if applicable
                         if is_worktree {
@@ -497,14 +497,11 @@ impl App {
                         match Tmux::kill_session(&session_name) {
                             Ok(_) => {
                                 self.refresh_sessions();
-                                self.message = Some(format!(
-                                    "Merged PR, deleted branch{}",
-                                    if is_worktree {
-                                        ", removed worktree, and closed session"
-                                    } else {
-                                        " and closed session"
-                                    }
-                                ));
+                                self.message = Some(if is_worktree {
+                                    "Merged PR, removed worktree, and closed session".to_string()
+                                } else {
+                                    "Merged PR and closed session".to_string()
+                                });
                             }
                             Err(e) => {
                                 self.refresh_sessions();
