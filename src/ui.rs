@@ -8,7 +8,7 @@ use ratatui::{
 };
 use unicode_width::UnicodeWidthStr;
 
-use crate::app::{App, Mode, NewSessionField, NewWorktreeField};
+use crate::app::{App, CreatePullRequestField, Mode, NewSessionField, NewWorktreeField};
 use crate::session::ClaudeCodeStatus;
 
 /// Render the application UI
@@ -69,6 +69,14 @@ pub fn render(frame: &mut Frame, app: &App) {
         }
         Mode::Filter { input } => {
             render_filter_bar(frame, input, layout[3]);
+        }
+        Mode::CreatePullRequest {
+            title,
+            body,
+            base_branch,
+            field,
+        } => {
+            render_create_pr_dialog(frame, title, body, base_branch, *field);
         }
         Mode::Help => {
             render_help(frame);
@@ -445,6 +453,7 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
         Mode::Rename { .. } => "  ⏎ confirm  esc cancel",
         Mode::Commit { .. } => "  ⏎ commit  esc cancel",
         Mode::NewWorktree { .. } => "  ⏎ create  tab switch field  ↑↓ select branch  esc cancel",
+        Mode::CreatePullRequest { .. } => "  ⏎ create PR  tab switch field  esc cancel",
         Mode::Help => "  q close",
     };
 
@@ -605,6 +614,80 @@ fn render_commit_dialog(frame: &mut Frame, message: &str) {
     let paragraph = Paragraph::new(text)
         .block(block)
         .wrap(Wrap { trim: true });
+
+    frame.render_widget(Clear, area);
+    frame.render_widget(paragraph, area);
+}
+
+fn render_create_pr_dialog(
+    frame: &mut Frame,
+    title: &str,
+    body: &str,
+    base_branch: &str,
+    field: CreatePullRequestField,
+) {
+    let area = centered_rect(65, 12, frame.area());
+
+    let block = Block::default()
+        .title(" Create Pull Request ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Green));
+
+    let title_style = if field == CreatePullRequestField::Title {
+        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default()
+    };
+
+    let body_style = if field == CreatePullRequestField::Body {
+        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default()
+    };
+
+    let base_style = if field == CreatePullRequestField::BaseBranch {
+        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default()
+    };
+
+    let cursor = |active: bool| if active { "_" } else { "" };
+
+    let text = Text::from(vec![
+        Line::from(vec![
+            Span::styled("Title: ", title_style),
+            Span::styled(title, Style::default().fg(Color::Yellow)),
+            Span::raw(cursor(field == CreatePullRequestField::Title)),
+        ]),
+        Line::raw(""),
+        Line::from(vec![
+            Span::styled("Body:  ", body_style),
+            Span::styled(
+                if body.is_empty() { "(optional)" } else { body },
+                if body.is_empty() {
+                    Style::default().fg(Color::DarkGray)
+                } else {
+                    Style::default().fg(Color::Yellow)
+                },
+            ),
+            Span::raw(cursor(field == CreatePullRequestField::Body)),
+        ]),
+        Line::raw(""),
+        Line::from(vec![
+            Span::styled("Base:  ", base_style),
+            Span::styled(base_branch, Style::default().fg(Color::Cyan)),
+            Span::raw(cursor(field == CreatePullRequestField::BaseBranch)),
+        ]),
+        Line::raw(""),
+        Line::styled(
+            "[Tab] Next field  [Enter] Create PR  [Esc] Cancel",
+            Style::default().fg(Color::DarkGray),
+        ),
+    ]);
+
+    let paragraph = Paragraph::new(text)
+        .block(block)
+        .wrap(Wrap { trim: false });
 
     frame.render_widget(Clear, area);
     frame.render_widget(paragraph, area);

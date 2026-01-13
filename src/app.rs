@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 
-use crate::git::GitContext;
+use crate::git::{self, GitContext};
 use crate::session::Session;
 use crate::tmux::Tmux;
 
@@ -40,6 +40,17 @@ pub enum Mode {
         /// Which field is active
         field: NewWorktreeField,
     },
+    /// Creating a pull request
+    CreatePullRequest {
+        /// PR title
+        title: String,
+        /// PR body/description
+        body: String,
+        /// Base branch to merge into
+        base_branch: String,
+        /// Which field is active
+        field: CreatePullRequestField,
+    },
     /// Showing help
     Help,
 }
@@ -63,6 +74,8 @@ pub enum SessionAction {
     PushSetUpstream,
     /// Pull commits from remote
     Pull,
+    /// Create a pull request
+    CreatePullRequest,
     /// Kill this session
     Kill,
     /// Kill session and delete its worktree
@@ -81,6 +94,7 @@ impl SessionAction {
             Self::Push => "Push to remote",
             Self::PushSetUpstream => "Push and set upstream",
             Self::Pull => "Pull from remote",
+            Self::CreatePullRequest => "Create pull request",
             Self::Kill => "Kill session",
             Self::KillAndDeleteWorktree => "Kill session + delete worktree",
         }
@@ -105,6 +119,14 @@ pub enum NewWorktreeField {
     Branch,
     Path,
     SessionName,
+}
+
+/// Which field is active in the create pull request dialog
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CreatePullRequestField {
+    Title,
+    Body,
+    BaseBranch,
 }
 
 /// Main application state
@@ -380,6 +402,10 @@ impl App {
                     Err(e) => self.error = Some(format!("Pull failed: {}", e)),
                 }
                 self.mode = Mode::Normal;
+            }
+            SessionAction::CreatePullRequest => {
+                // Enter create PR mode
+                self.start_create_pull_request();
             }
             SessionAction::Kill => {
                 match Tmux::kill_session(&session_name) {
@@ -723,6 +749,60 @@ impl App {
         self.mode = Mode::Normal;
     }
 
+    /// Start the create pull request flow
+    pub fn start_create_pull_request(&mut self) {
+        self.clear_messages();
+        let Some(session) = self.selected_session() else {
+            return;
+        };
+
+        let path = &session.working_directory;
+        let base_branch = git::get_default_branch(path).unwrap_or_else(|| "main".to_string());
+
+        self.mode = Mode::CreatePullRequest {
+            title: String::new(),
+            body: String::new(),
+            base_branch,
+            field: CreatePullRequestField::Title,
+        };
+    }
+
+    /// Confirm and execute PR creation
+    pub fn confirm_create_pull_request(&mut self) {
+        let (title, body, base_branch) = if let Mode::CreatePullRequest {
+            ref title,
+            ref body,
+            ref base_branch,
+            ..
+        } = self.mode
+        {
+            (title.clone(), body.clone(), base_branch.clone())
+        } else {
+            self.mode = Mode::Normal;
+            return;
+        };
+
+        if title.trim().is_empty() {
+            self.error = Some("PR title cannot be empty".to_string());
+            self.mode = Mode::Normal;
+            return;
+        }
+
+        if let Some(session) = self.selected_session() {
+            let path = session.working_directory.clone();
+            match git::create_pull_request(&path, &title, &body, &base_branch) {
+                Ok(result) => {
+                    self.message = Some(format!("Created PR: {}", result.url));
+                }
+                Err(e) => {
+                    self.error = Some(format!("Failed to create PR: {}", e));
+                }
+            }
+        }
+
+        self.mode = Mode::Normal;
+    }
+
     /// Start filter mode
     pub fn start_filter(&mut self) {
         self.clear_messages();
@@ -787,6 +867,17 @@ impl App {
                 // Pull: behind > 0 and clean (dirty state can cause merge conflicts)
                 if git.behind > 0 && !git.is_dirty() {
                     actions.push(SessionAction::Pull);
+                }
+
+                // Create PR: upstream exists, gh available, GitHub remote, not on default branch
+                let path = &session.working_directory;
+                if git::is_gh_available() && git::is_github_remote(path) {
+                    // Check if not on default branch
+                    if let Some(default_branch) = git::get_default_branch(path) {
+                        if git.branch != default_branch {
+                            actions.push(SessionAction::CreatePullRequest);
+                        }
+                    }
                 }
             } else if git.has_remote {
                 // No upstream but remote exists - offer to push and set upstream

@@ -1,6 +1,6 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use crate::app::{App, Mode, NewSessionField, NewWorktreeField};
+use crate::app::{App, CreatePullRequestField, Mode, NewSessionField, NewWorktreeField};
 
 /// Handle a key event and update the application state
 pub fn handle_key(app: &mut App, key: KeyEvent) {
@@ -16,6 +16,7 @@ pub fn handle_key(app: &mut App, key: KeyEvent) {
         Mode::Rename { .. } => handle_rename_mode(app, key),
         Mode::Commit { .. } => handle_commit_mode(app, key),
         Mode::NewWorktree { .. } => handle_new_worktree_mode(app, key),
+        Mode::CreatePullRequest { .. } => handle_create_pr_mode(app, key),
         Mode::Help => handle_help_mode(app, key),
     }
 }
@@ -372,6 +373,83 @@ fn handle_new_worktree_mode(app: &mut App, key: KeyEvent) {
                     );
                 }
                 app.update_worktree_suggestions();
+            }
+        }
+        _ => {}
+    }
+}
+
+fn handle_create_pr_mode(app: &mut App, key: KeyEvent) {
+    match key.code {
+        KeyCode::Esc => {
+            app.cancel();
+        }
+        KeyCode::Tab => {
+            // Cycle through fields
+            if let Mode::CreatePullRequest { ref mut field, .. } = app.mode {
+                *field = match field {
+                    CreatePullRequestField::Title => CreatePullRequestField::Body,
+                    CreatePullRequestField::Body => CreatePullRequestField::BaseBranch,
+                    CreatePullRequestField::BaseBranch => CreatePullRequestField::Title,
+                };
+            }
+        }
+        KeyCode::BackTab => {
+            // Cycle backwards through fields
+            if let Mode::CreatePullRequest { ref mut field, .. } = app.mode {
+                *field = match field {
+                    CreatePullRequestField::Title => CreatePullRequestField::BaseBranch,
+                    CreatePullRequestField::Body => CreatePullRequestField::Title,
+                    CreatePullRequestField::BaseBranch => CreatePullRequestField::Body,
+                };
+            }
+        }
+        KeyCode::Enter => {
+            app.confirm_create_pull_request();
+        }
+        KeyCode::Backspace => {
+            if let Mode::CreatePullRequest {
+                ref mut title,
+                ref mut body,
+                ref mut base_branch,
+                field,
+            } = app.mode
+            {
+                match field {
+                    CreatePullRequestField::Title => {
+                        title.pop();
+                    }
+                    CreatePullRequestField::Body => {
+                        body.pop();
+                    }
+                    CreatePullRequestField::BaseBranch => {
+                        base_branch.pop();
+                    }
+                }
+            }
+        }
+        KeyCode::Char(c) => {
+            if let Mode::CreatePullRequest {
+                ref mut title,
+                ref mut body,
+                ref mut base_branch,
+                field,
+            } = app.mode
+            {
+                match field {
+                    CreatePullRequestField::Title => {
+                        title.push(c);
+                    }
+                    CreatePullRequestField::Body => {
+                        body.push(c);
+                    }
+                    CreatePullRequestField::BaseBranch => {
+                        // Branch names have specific allowed characters
+                        if c.is_alphanumeric() || c == '-' || c == '_' || c == '/' {
+                            base_branch.push(c);
+                        }
+                    }
+                }
             }
         }
         _ => {}
