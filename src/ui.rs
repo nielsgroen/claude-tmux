@@ -902,6 +902,7 @@ fn render_create_pr_dialog(
     frame.render_widget(paragraph, area);
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_new_worktree_dialog(
     frame: &mut Frame,
     app: &App,

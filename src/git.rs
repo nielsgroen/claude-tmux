@@ -23,8 +23,6 @@ pub struct PullRequestResult {
 pub struct PullRequestInfo {
     /// PR number
     pub number: u64,
-    /// PR URL
-    pub url: String,
     /// PR state (OPEN, CLOSED, MERGED)
     pub state: String,
     /// Whether the PR is mergeable (MERGEABLE, CONFLICTING, UNKNOWN)
@@ -84,7 +82,7 @@ pub fn get_default_branch(path: &Path) -> Option<String> {
         if let Ok(resolved) = reference.resolve() {
             if let Some(name) = resolved.shorthand() {
                 // Returns "origin/main" -> extract "main"
-                return name.split('/').last().map(|s| s.to_string());
+                return name.split('/').next_back().map(|s| s.to_string());
             }
         }
     }
@@ -157,13 +155,12 @@ pub fn get_pull_request_info(path: &Path) -> Option<PullRequestInfo> {
     let json_str = String::from_utf8_lossy(&output.stdout);
 
     // Simple JSON parsing without adding a dependency
-    // Format: {"number":123,"url":"https://...","state":"OPEN","mergeable":"MERGEABLE"}
+    // Format: {"number":123,"state":"OPEN","mergeable":"MERGEABLE"}
     let number = extract_json_u64(&json_str, "number")?;
-    let url = extract_json_string(&json_str, "url")?;
     let state = extract_json_string(&json_str, "state")?;
     let mergeable = extract_json_string(&json_str, "mergeable").unwrap_or_else(|| "UNKNOWN".to_string());
 
-    Some(PullRequestInfo { number, url, state, mergeable })
+    Some(PullRequestInfo { number, state, mergeable })
 }
 
 /// Open the PR for the current branch in the browser
