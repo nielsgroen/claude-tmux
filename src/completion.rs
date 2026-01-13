@@ -201,14 +201,18 @@ pub fn branch_ghost_text(input: &str, branches: &[&str], selected: Option<usize>
         return None;
     }
 
-    // Use selected branch or first match
+    let input_lower = input.to_lowercase();
+
+    // Use selected branch or first matching branch
     let target = if let Some(idx) = selected {
         branches.get(idx)?
     } else {
-        branches.first()?
+        // Find first branch that starts with input
+        branches
+            .iter()
+            .find(|b| b.to_lowercase().starts_with(&input_lower))?
     };
 
-    let input_lower = input.to_lowercase();
     let target_lower = target.to_lowercase();
 
     // If input is a prefix of target, return the suffix
@@ -241,16 +245,27 @@ mod tests {
     fn test_branch_ghost_text() {
         let branches = vec!["main", "feature/login", "feature/signup"];
 
+        // No selection: finds first matching branch ("feature/login")
         assert_eq!(
             branch_ghost_text("feat", &branches, None),
             Some("ure/login".to_string())
         );
 
+        // With selection: uses the selected branch from the list
+        // branches[1] = "feature/login", so ghost text is "login"
         assert_eq!(
             branch_ghost_text("feature/", &branches, Some(1)),
+            Some("login".to_string())
+        );
+
+        // Test with a filtered list (as used in practice)
+        let filtered = vec!["feature/login", "feature/signup"];
+        assert_eq!(
+            branch_ghost_text("feature/", &filtered, Some(1)),
             Some("signup".to_string())
         );
 
+        // No match returns None
         assert_eq!(branch_ghost_text("nonexistent", &branches, None), None);
     }
 }

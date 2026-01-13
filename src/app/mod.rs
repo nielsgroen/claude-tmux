@@ -1,4 +1,13 @@
-use std::path::PathBuf;
+//! Application state and business logic
+//!
+//! This module contains the core application state machine:
+//! - `App` struct: main application state
+//! - Mode handling and transitions
+//! - Session actions and execution
+//! - Dialog flows (rename, new session, worktree, PR)
+
+mod helpers;
+mod mode;
 
 use anyhow::Result;
 
@@ -7,162 +16,13 @@ use crate::scroll_state::ScrollState;
 use crate::session::Session;
 use crate::tmux::Tmux;
 
-/// The current mode/state of the application
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Mode {
-    /// Normal browsing mode
-    Normal,
-    /// Viewing actions for selected session
-    ActionMenu,
-    /// Filtering sessions with search input
-    Filter { input: String },
-    /// Confirming an action (kill, etc.)
-    ConfirmAction,
-    /// Creating a new session
-    NewSession {
-        name: String,
-        path: String,
-        field: NewSessionField,
-        /// Path completion suggestions
-        path_suggestions: Vec<String>,
-        /// Currently selected path suggestion index
-        path_selected: Option<usize>,
-    },
-    /// Renaming a session
-    Rename { old_name: String, new_name: String },
-    /// Entering commit message
-    Commit { message: String },
-    /// Creating a new session from a worktree
-    NewWorktree {
-        /// The source repository path (from selected session)
-        source_repo: PathBuf,
-        /// All branches in the repository
-        all_branches: Vec<String>,
-        /// Branch name input (may be new or existing)
-        branch_input: String,
-        /// Selected index in filtered branches (None = creating new branch)
-        selected_branch: Option<usize>,
-        /// Worktree path
-        worktree_path: String,
-        /// Session name
-        session_name: String,
-        /// Which field is active
-        field: NewWorktreeField,
-        /// Path completion suggestions
-        path_suggestions: Vec<String>,
-        /// Currently selected path suggestion index
-        path_selected: Option<usize>,
-    },
-    /// Creating a pull request
-    CreatePullRequest {
-        /// PR title
-        title: String,
-        /// PR body/description
-        body: String,
-        /// Base branch to merge into
-        base_branch: String,
-        /// Which field is active
-        field: CreatePullRequestField,
-    },
-    /// Showing help
-    Help,
-}
+// Re-export types that are part of the public API
+pub use mode::{
+    CreatePullRequestField, Mode, NewSessionField, NewWorktreeField, SessionAction,
+};
 
-/// An action that can be performed on a session
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SessionAction {
-    /// Switch to this session
-    SwitchTo,
-    /// Rename this session
-    Rename,
-    /// Create a new session from a worktree
-    NewWorktree,
-    /// Stage all changes
-    Stage,
-    /// Commit staged changes
-    Commit,
-    /// Push commits to remote
-    Push,
-    /// Push and set upstream branch
-    PushSetUpstream,
-    /// Fetch from remote (update tracking branches)
-    Fetch,
-    /// Pull commits from remote
-    Pull,
-    /// Create a pull request
-    CreatePullRequest,
-    /// View pull request in browser
-    ViewPullRequest,
-    /// Close pull request without merging
-    ClosePullRequest,
-    /// Merge pull request
-    MergePullRequest,
-    /// Merge PR, delete branch, remove worktree, kill session
-    MergePullRequestAndClose,
-    /// Kill this session
-    Kill,
-    /// Kill session and delete its worktree
-    KillAndDeleteWorktree,
-}
-
-impl SessionAction {
-    /// Returns the display label for this action
-    pub fn label(&self) -> &'static str {
-        match self {
-            Self::SwitchTo => "Switch to session",
-            Self::Rename => "Rename session",
-            Self::NewWorktree => "New session from worktree",
-            Self::Stage => "Stage all changes",
-            Self::Commit => "Commit staged changes",
-            Self::Push => "Push to remote",
-            Self::PushSetUpstream => "Push and set upstream",
-            Self::Fetch => "Fetch from remote",
-            Self::Pull => "Pull from remote",
-            Self::CreatePullRequest => "Create pull request",
-            Self::ViewPullRequest => "View pull request",
-            Self::ClosePullRequest => "Close pull request",
-            Self::MergePullRequest => "Merge pull request",
-            Self::MergePullRequestAndClose => "Merge PR + close session",
-            Self::Kill => "Kill session",
-            Self::KillAndDeleteWorktree => "Kill session + delete worktree",
-        }
-    }
-
-    /// Whether this action requires confirmation
-    pub fn requires_confirmation(&self) -> bool {
-        matches!(
-            self,
-            Self::Kill
-                | Self::KillAndDeleteWorktree
-                | Self::ClosePullRequest
-                | Self::MergePullRequest
-                | Self::MergePullRequestAndClose
-        )
-    }
-}
-
-/// Which field is active in the new session dialog
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NewSessionField {
-    Name,
-    Path,
-}
-
-/// Which field is active in the new worktree dialog
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NewWorktreeField {
-    Branch,
-    Path,
-    SessionName,
-}
-
-/// Which field is active in the create pull request dialog
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CreatePullRequestField {
-    Title,
-    Body,
-    BaseBranch,
-}
+// Use helpers internally
+use helpers::{default_worktree_path, expand_path, sanitize_for_session_name};
 
 /// Main application state
 pub struct App {
@@ -197,6 +57,10 @@ pub struct App {
 }
 
 impl App {
+    // =========================================================================
+    // Initialization and core lifecycle
+    // =========================================================================
+
     /// Create a new App instance
     pub fn new() -> Result<Self> {
         let sessions = Tmux::list_sessions()?;
@@ -274,6 +138,10 @@ impl App {
         }
     }
 
+    // =========================================================================
+    // Session selection and navigation
+    // =========================================================================
+
     /// Get filtered sessions based on current filter
     pub fn filtered_sessions(&self) -> Vec<&Session> {
         if self.filter.is_empty() {
@@ -330,6 +198,146 @@ impl App {
         }
     }
 
+    // =========================================================================
+    // Action menu
+    // =========================================================================
+
+    /// Enter the action menu for the selected session
+    pub fn enter_action_menu(&mut self) {
+        self.clear_messages();
+        if self.selected_session().is_some() {
+            self.compute_actions();
+            self.mode = Mode::ActionMenu;
+        }
+    }
+
+    /// Move to next action in the action menu
+    pub fn select_next_action(&mut self) {
+        if !self.available_actions.is_empty() {
+            self.selected_action = (self.selected_action + 1) % self.available_actions.len();
+        }
+    }
+
+    /// Move to previous action in the action menu
+    pub fn select_prev_action(&mut self) {
+        if !self.available_actions.is_empty() {
+            if self.selected_action == 0 {
+                self.selected_action = self.available_actions.len() - 1;
+            } else {
+                self.selected_action -= 1;
+            }
+        }
+    }
+
+    /// Execute the currently selected action from the action menu
+    pub fn execute_selected_action(&mut self) {
+        if let Some(action) = self.available_actions.get(self.selected_action).cloned() {
+            if action.requires_confirmation() {
+                self.pending_action = Some(action);
+                self.mode = Mode::ConfirmAction;
+            } else {
+                // execute_action handles its own mode transitions
+                self.execute_action(action);
+            }
+        }
+    }
+
+    /// Compute available actions for the selected session
+    fn compute_actions(&mut self) {
+        // Extract data we need from the session first to avoid borrow conflicts
+        let session_data = self.selected_session().map(|s| {
+            (s.working_directory.clone(), s.git_context.clone())
+        });
+
+        let Some((working_dir, git_context)) = session_data else {
+            self.available_actions = vec![];
+            self.pr_info = None;
+            return;
+        };
+
+        let mut actions = vec![SessionAction::SwitchTo, SessionAction::Rename];
+
+        // Reset PR info
+        self.pr_info = None;
+
+        // Add git actions if applicable
+        if let Some(ref git) = git_context {
+            // New worktree: available for any git repo
+            actions.push(SessionAction::NewWorktree);
+
+            // Stage: if there are unstaged changes
+            if git.has_unstaged {
+                actions.push(SessionAction::Stage);
+            }
+            // Commit: if there are staged changes
+            if git.has_staged {
+                actions.push(SessionAction::Commit);
+            }
+
+            // Fetch: always available if there's a remote (safe operation)
+            if git.has_remote {
+                actions.push(SessionAction::Fetch);
+            }
+
+            if git.has_upstream {
+                // Push: ahead > 0 (dirty state doesn't prevent pushing commits)
+                if git.ahead > 0 {
+                    actions.push(SessionAction::Push);
+                }
+                // Pull: behind > 0 and clean (dirty state can cause merge conflicts)
+                if git.behind > 0 && !git.is_dirty() {
+                    actions.push(SessionAction::Pull);
+                }
+
+                // PR actions: upstream exists, gh available, GitHub remote, not on default branch
+                if git::is_gh_available() && git::is_github_remote(&working_dir) {
+                    // Check if not on default branch
+                    if let Some(default_branch) = git::get_default_branch(&working_dir) {
+                        if git.branch != default_branch {
+                            // Check if PR already exists for this branch
+                            let pr_info = git::get_pull_request_info(&working_dir);
+                            if let Some(ref info) = pr_info {
+                                if info.state == "OPEN" {
+                                    actions.push(SessionAction::ViewPullRequest);
+                                    actions.push(SessionAction::ClosePullRequest);
+                                    actions.push(SessionAction::MergePullRequest);
+                                    actions.push(SessionAction::MergePullRequestAndClose);
+                                } else {
+                                    // PR exists but is CLOSED or MERGED - can create a new one
+                                    actions.push(SessionAction::CreatePullRequest);
+                                }
+                            } else {
+                                // No PR exists, offer to create one
+                                actions.push(SessionAction::CreatePullRequest);
+                            }
+                            // Store PR info for UI display
+                            self.pr_info = pr_info;
+                        }
+                    }
+                }
+            } else if git.has_remote {
+                // No upstream but remote exists - offer to push and set upstream
+                actions.push(SessionAction::PushSetUpstream);
+            }
+        }
+
+        actions.push(SessionAction::Kill);
+
+        // Add worktree deletion option if this is a worktree
+        if let Some(ref git) = git_context {
+            if git.is_worktree {
+                actions.push(SessionAction::KillAndDeleteWorktree);
+            }
+        }
+
+        self.available_actions = actions;
+        self.selected_action = 0;
+    }
+
+    // =========================================================================
+    // Action execution
+    // =========================================================================
+
     /// Start the kill confirmation flow (direct kill without action menu)
     pub fn start_kill(&mut self) {
         self.clear_messages();
@@ -343,30 +351,6 @@ impl App {
     pub fn confirm_action(&mut self) {
         if let Some(action) = self.pending_action.take() {
             self.execute_action(action);
-        }
-        self.mode = Mode::Normal;
-    }
-
-    /// Confirm and execute the commit
-    pub fn confirm_commit(&mut self) {
-        if let Mode::Commit { ref message } = self.mode {
-            if message.trim().is_empty() {
-                self.error = Some("Commit message cannot be empty".to_string());
-                self.mode = Mode::Normal;
-                return;
-            }
-
-            if let Some(session) = self.selected_session() {
-                let path = session.working_directory.clone();
-                let msg = message.clone();
-                match GitContext::commit(&path, &msg) {
-                    Ok(_) => {
-                        self.refresh_sessions();
-                        self.message = Some("Committed changes".to_string());
-                    }
-                    Err(e) => self.error = Some(format!("Commit failed: {}", e)),
-                }
-            }
         }
         self.mode = Mode::Normal;
     }
@@ -388,7 +372,6 @@ impl App {
                 self.mode = Mode::Normal;
             }
             SessionAction::Rename => {
-                // Enter rename mode (don't set Normal)
                 self.mode = Mode::Rename {
                     old_name: session_name.clone(),
                     new_name: session_name,
@@ -406,7 +389,6 @@ impl App {
                 self.mode = Mode::Normal;
             }
             SessionAction::Commit => {
-                // Enter commit mode (don't set Normal)
                 self.mode = Mode::Commit {
                     message: String::new(),
                 };
@@ -456,7 +438,6 @@ impl App {
                 self.mode = Mode::Normal;
             }
             SessionAction::CreatePullRequest => {
-                // Enter create PR mode
                 self.start_create_pull_request();
             }
             SessionAction::ViewPullRequest => {
@@ -498,7 +479,7 @@ impl App {
                     .map(|g| g.is_worktree)
                     .unwrap_or(false);
 
-                // Step 1: Merge PR (never delete branch - user can do that manually if desired)
+                // Step 1: Merge PR
                 match git::merge_pull_request(&path, false) {
                     Ok(_) => {
                         // Step 2: Delete worktree if applicable
@@ -545,7 +526,6 @@ impl App {
                 self.mode = Mode::Normal;
             }
             SessionAction::NewWorktree => {
-                // Enter new worktree mode
                 self.start_new_worktree();
             }
             SessionAction::KillAndDeleteWorktree => {
@@ -577,6 +557,10 @@ impl App {
             }
         }
     }
+
+    // =========================================================================
+    // Dialog flows: Rename
+    // =========================================================================
 
     /// Start the rename flow
     pub fn start_rename(&mut self) {
@@ -616,6 +600,38 @@ impl App {
         }
         self.mode = Mode::Normal;
     }
+
+    // =========================================================================
+    // Dialog flows: Commit
+    // =========================================================================
+
+    /// Confirm and execute the commit
+    pub fn confirm_commit(&mut self) {
+        if let Mode::Commit { ref message } = self.mode {
+            if message.trim().is_empty() {
+                self.error = Some("Commit message cannot be empty".to_string());
+                self.mode = Mode::Normal;
+                return;
+            }
+
+            if let Some(session) = self.selected_session() {
+                let path = session.working_directory.clone();
+                let msg = message.clone();
+                match GitContext::commit(&path, &msg) {
+                    Ok(_) => {
+                        self.refresh_sessions();
+                        self.message = Some("Committed changes".to_string());
+                    }
+                    Err(e) => self.error = Some(format!("Commit failed: {}", e)),
+                }
+            }
+        }
+        self.mode = Mode::Normal;
+    }
+
+    // =========================================================================
+    // Dialog flows: New Session
+    // =========================================================================
 
     /// Start the new session flow
     pub fn start_new_session(&mut self) {
@@ -664,6 +680,10 @@ impl App {
         }
         self.mode = Mode::Normal;
     }
+
+    // =========================================================================
+    // Dialog flows: New Worktree
+    // =========================================================================
 
     /// Start the new worktree flow
     pub fn start_new_worktree(&mut self) {
@@ -843,7 +863,14 @@ impl App {
 
         let (branch_name, is_new_branch) = if let Some(idx) = selected_branch {
             // User selected an existing branch
-            (filtered.get(idx).copied().unwrap_or(&branch_input).to_string(), false)
+            (
+                filtered
+                    .get(idx)
+                    .copied()
+                    .unwrap_or(&branch_input)
+                    .to_string(),
+                false,
+            )
         } else if all_branches.iter().any(|b| b == &branch_input) {
             // Exact match with existing branch
             (branch_input.clone(), false)
@@ -855,8 +882,12 @@ impl App {
         let worktree_path_buf = expand_path(&worktree_path);
 
         // Create the worktree
-        match GitContext::create_worktree(&source_repo, &worktree_path_buf, &branch_name, is_new_branch)
-        {
+        match GitContext::create_worktree(
+            &source_repo,
+            &worktree_path_buf,
+            &branch_name,
+            is_new_branch,
+        ) {
             Ok(_) => {
                 // Create the session
                 match Tmux::new_session(&session_name, &worktree_path_buf, true) {
@@ -882,6 +913,10 @@ impl App {
 
         self.mode = Mode::Normal;
     }
+
+    // =========================================================================
+    // Dialog flows: Create Pull Request
+    // =========================================================================
 
     /// Start the create pull request flow
     pub fn start_create_pull_request(&mut self) {
@@ -937,6 +972,10 @@ impl App {
         self.mode = Mode::Normal;
     }
 
+    // =========================================================================
+    // Filter mode
+    // =========================================================================
+
     /// Start filter mode
     pub fn start_filter(&mut self) {
         self.clear_messages();
@@ -967,151 +1006,16 @@ impl App {
         self.mode = Mode::Help;
     }
 
-    /// Compute available actions for the selected session
-    fn compute_actions(&mut self) {
-        // Extract data we need from the session first to avoid borrow conflicts
-        let session_data = self.selected_session().map(|s| {
-            (
-                s.working_directory.clone(),
-                s.git_context.clone(),
-            )
-        });
-
-        let Some((working_dir, git_context)) = session_data else {
-            self.available_actions = vec![];
-            self.pr_info = None;
-            return;
-        };
-
-        let mut actions = vec![
-            SessionAction::SwitchTo,
-            SessionAction::Rename,
-        ];
-
-        // Reset PR info
-        self.pr_info = None;
-
-        // Add git actions if applicable
-        if let Some(ref git) = git_context {
-            // New worktree: available for any git repo
-            actions.push(SessionAction::NewWorktree);
-
-            // Stage: if there are unstaged changes
-            if git.has_unstaged {
-                actions.push(SessionAction::Stage);
-            }
-            // Commit: if there are staged changes
-            if git.has_staged {
-                actions.push(SessionAction::Commit);
-            }
-
-            // Fetch: always available if there's a remote (safe operation)
-            if git.has_remote {
-                actions.push(SessionAction::Fetch);
-            }
-
-            if git.has_upstream {
-                // Push: ahead > 0 (dirty state doesn't prevent pushing commits)
-                if git.ahead > 0 {
-                    actions.push(SessionAction::Push);
-                }
-                // Pull: behind > 0 and clean (dirty state can cause merge conflicts)
-                if git.behind > 0 && !git.is_dirty() {
-                    actions.push(SessionAction::Pull);
-                }
-
-                // PR actions: upstream exists, gh available, GitHub remote, not on default branch
-                if git::is_gh_available() && git::is_github_remote(&working_dir) {
-                    // Check if not on default branch
-                    if let Some(default_branch) = git::get_default_branch(&working_dir) {
-                        if git.branch != default_branch {
-                            // Check if PR already exists for this branch
-                            let pr_info = git::get_pull_request_info(&working_dir);
-                            if let Some(ref info) = pr_info {
-                                if info.state == "OPEN" {
-                                    actions.push(SessionAction::ViewPullRequest);
-                                    actions.push(SessionAction::ClosePullRequest);
-                                    actions.push(SessionAction::MergePullRequest);
-                                    actions.push(SessionAction::MergePullRequestAndClose);
-                                } else {
-                                    // PR exists but is CLOSED or MERGED - can create a new one
-                                    actions.push(SessionAction::CreatePullRequest);
-                                }
-                            } else {
-                                // No PR exists, offer to create one
-                                actions.push(SessionAction::CreatePullRequest);
-                            }
-                            // Store PR info for UI display
-                            self.pr_info = pr_info;
-                        }
-                    }
-                }
-            } else if git.has_remote {
-                // No upstream but remote exists - offer to push and set upstream
-                actions.push(SessionAction::PushSetUpstream);
-            }
-        }
-
-        actions.push(SessionAction::Kill);
-
-        // Add worktree deletion option if this is a worktree
-        if let Some(ref git) = git_context {
-            if git.is_worktree {
-                actions.push(SessionAction::KillAndDeleteWorktree);
-            }
-        }
-
-        self.available_actions = actions;
-        self.selected_action = 0;
-    }
-
-    /// Enter the action menu for the selected session
-    pub fn enter_action_menu(&mut self) {
-        self.clear_messages();
-        if self.selected_session().is_some() {
-            self.compute_actions();
-            self.mode = Mode::ActionMenu;
-        }
-    }
-
-    /// Move to next action in the action menu
-    pub fn select_next_action(&mut self) {
-        if !self.available_actions.is_empty() {
-            self.selected_action = (self.selected_action + 1) % self.available_actions.len();
-        }
-    }
-
-    /// Move to previous action in the action menu
-    pub fn select_prev_action(&mut self) {
-        if !self.available_actions.is_empty() {
-            if self.selected_action == 0 {
-                self.selected_action = self.available_actions.len() - 1;
-            } else {
-                self.selected_action -= 1;
-            }
-        }
-    }
-
-    /// Execute the currently selected action from the action menu
-    pub fn execute_selected_action(&mut self) {
-        if let Some(action) = self.available_actions.get(self.selected_action).cloned() {
-            if action.requires_confirmation() {
-                self.pending_action = Some(action);
-                self.mode = Mode::ConfirmAction;
-            } else {
-                // execute_action handles its own mode transitions
-                // (e.g., Rename sets Mode::Rename, SwitchTo quits)
-                self.execute_action(action);
-            }
-        }
-    }
-
     /// Cancel current mode and return to normal
     pub fn cancel(&mut self) {
         self.pending_action = None;
         self.pr_info = None;
         self.mode = Mode::Normal;
     }
+
+    // =========================================================================
+    // Status and statistics
+    // =========================================================================
 
     /// Count sessions by status
     pub fn status_counts(&self) -> (usize, usize, usize) {
@@ -1198,7 +1102,13 @@ impl App {
             }
             *path_selected = Some(
                 path_selected
-                    .map(|i| if i == 0 { path_suggestions.len() - 1 } else { i - 1 })
+                    .map(|i| {
+                        if i == 0 {
+                            path_suggestions.len() - 1
+                        } else {
+                            i - 1
+                        }
+                    })
                     .unwrap_or(path_suggestions.len() - 1),
             );
         }
@@ -1260,7 +1170,13 @@ impl App {
             }
             *path_selected = Some(
                 path_selected
-                    .map(|i| if i == 0 { path_suggestions.len() - 1 } else { i - 1 })
+                    .map(|i| {
+                        if i == 0 {
+                            path_suggestions.len() - 1
+                        } else {
+                            i - 1
+                        }
+                    })
                     .unwrap_or(path_suggestions.len() - 1),
             );
         }
@@ -1355,6 +1271,10 @@ impl App {
         }
     }
 
+    // =========================================================================
+    // Scroll/list computation
+    // =========================================================================
+
     /// Compute the flat list index for the current selection.
     ///
     /// The list has a complex structure where the selected session expands
@@ -1378,7 +1298,10 @@ impl App {
                 index += 1;
 
                 // Add 1 for git info row if present
-                if self.selected_session().is_some_and(|s| s.git_context.is_some()) {
+                if self
+                    .selected_session()
+                    .is_some_and(|s| s.git_context.is_some())
+                {
                     index += 1;
 
                     // Add 1 for PR info row if present
@@ -1425,7 +1348,10 @@ impl App {
                 // - 1 end separator
                 total += 1; // metadata row
 
-                if self.selected_session().is_some_and(|s| s.git_context.is_some()) {
+                if self
+                    .selected_session()
+                    .is_some_and(|s| s.git_context.is_some())
+                {
                     total += 1; // git info row
                     if self.pr_info.is_some() {
                         total += 1; // PR info row
@@ -1441,40 +1367,4 @@ impl App {
             _ => filtered_count,
         }
     }
-}
-
-/// Expand ~ to home directory in a path string
-fn expand_path(path: &str) -> PathBuf {
-    if let Some(stripped) = path.strip_prefix("~/") {
-        if let Some(home) = dirs::home_dir() {
-            return home.join(stripped);
-        }
-    } else if path == "~" {
-        if let Some(home) = dirs::home_dir() {
-            return home;
-        }
-    }
-    PathBuf::from(path)
-}
-
-/// Sanitize a branch name for use as a session name
-/// e.g., "feature/new-thing" -> "new-thing"
-fn sanitize_for_session_name(branch: &str) -> String {
-    branch
-        .rsplit('/')
-        .next()
-        .unwrap_or(branch)
-        .replace(['/', '\\', ' ', ':', '.'], "-")
-}
-
-/// Generate default worktree path from repo path and branch name
-/// e.g., ~/repos/project + feature/foo -> ~/repos/project-foo
-fn default_worktree_path(repo_path: &std::path::Path, branch: &str) -> PathBuf {
-    let parent = repo_path.parent().unwrap_or(repo_path);
-    let repo_name = repo_path
-        .file_name()
-        .and_then(|s| s.to_str())
-        .unwrap_or("repo");
-    let branch_suffix = sanitize_for_session_name(branch);
-    parent.join(format!("{}-{}", repo_name, branch_suffix))
 }
