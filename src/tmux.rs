@@ -92,7 +92,7 @@ impl Tmux {
                 "-t",
                 session,
                 "-F",
-                "#{pane_id}\t#{pane_current_command}\t#{pane_current_path}",
+                "#{pane_id}\t#{pane_current_command}\t#{window_name}\t#{pane_current_path}",
             ])
             .output()
             .context("Failed to execute tmux list-panes")?;
@@ -106,11 +106,12 @@ impl Tmux {
 
         for line in stdout.lines() {
             let parts: Vec<&str> = line.split('\t').collect();
-            if parts.len() >= 3 {
+            if parts.len() >= 4 {
                 panes.push(Pane {
                     id: parts[0].to_string(),
                     current_command: parts[1].to_string(),
-                    current_path: PathBuf::from(parts[2]),
+                    window_name: parts[2].to_string(),
+                    current_path: PathBuf::from(parts[3]),
                 });
             }
         }
@@ -130,8 +131,10 @@ impl Tmux {
         use crate::session::ClaudeCodeStatus;
 
         for pane in panes {
-            // Check if this pane is running claude
-            if pane.current_command == "claude" || pane.current_command.contains("claude") {
+            // Check if this pane is running claude (by command name or window name)
+            let command_match = pane.current_command == "claude" || pane.current_command.contains("claude");
+            let window_match = pane.window_name.to_lowercase().contains("claude");
+            if command_match || window_match {
                 // Capture pane content to detect status (strip empty lines for detection)
                 let status = Self::capture_pane(&pane.id, 15, true)
                     .map(|content| detect_status(&content))

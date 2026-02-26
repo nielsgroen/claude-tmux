@@ -45,6 +45,8 @@ pub struct Pane {
     pub id: String,
     /// Current command running in the pane
     pub current_command: String,
+    /// Name of the window containing this pane
+    pub window_name: String,
     /// Current working directory
     pub current_path: PathBuf,
 }
