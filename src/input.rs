@@ -534,6 +534,19 @@ pub fn handle_mouse(app: &mut App, mouse: MouseEvent) {
         return;
     }
 
+    // First check: if click is in preview area, switch to selected session
+    if let Some(preview_area) = app.preview_area {
+        let mouse_row = mouse.row as usize;
+        let preview_y = preview_area.y as usize;
+        let preview_height = preview_area.height as usize;
+
+        if mouse_row >= preview_y && mouse_row < preview_y + preview_height {
+            // Click is in preview pane - switch to selected session
+            app.switch_to_selected();
+            return;
+        }
+    }
+
     // Get the list area; if not set, ignore
     let list_area = match app.list_area {
         Some(area) => area,

@@ -57,6 +57,8 @@ pub struct App {
     pub scroll_state: ScrollState,
     /// Area where the session list is rendered (set during render)
     pub list_area: Option<Rect>,
+    /// Area where the preview pane is rendered (set during render)
+    pub preview_area: Option<Rect>,
 }
 
 impl App {
@@ -85,6 +87,7 @@ impl App {
             pr_info: None,
             scroll_state: ScrollState::new(),
             list_area: None,
+            preview_area: None,
         };
 
         app.update_preview();
