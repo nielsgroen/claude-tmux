@@ -12,7 +12,7 @@ use std::io::{self, stdout};
 
 use anyhow::Result;
 use crossterm::{
-    event::{self, Event},
+    event::{self, Event, DisableMouseCapture, EnableMouseCapture},
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
     ExecutableCommand,
 };
@@ -24,6 +24,7 @@ fn main() -> Result<()> {
     // Set up terminal
     enable_raw_mode()?;
     stdout().execute(EnterAlternateScreen)?;
+    stdout().execute(EnableMouseCapture)?;
 
     let backend = CrosstermBackend::new(stdout());
     let mut terminal = Terminal::new(backend)?;
@@ -32,6 +33,7 @@ fn main() -> Result<()> {
     let result = run(&mut terminal);
 
     // Restore terminal
+    stdout().execute(DisableMouseCapture)?;
     disable_raw_mode()?;
     stdout().execute(LeaveAlternateScreen)?;
 
