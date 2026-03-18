@@ -54,8 +54,10 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
 
         // Handle events
         if event::poll(std::time::Duration::from_millis(100))? {
-            if let Event::Key(key) = event::read()? {
-                input::handle_key(&mut app, key);
+            match event::read()? {
+                Event::Key(key) => input::handle_key(&mut app, key),
+                Event::Mouse(mouse) => input::handle_mouse(&mut app, mouse),
+                _ => {} // ignore other events (Resize, etc.)
             }
         }
     }
