@@ -15,6 +15,7 @@ use crate::git::{self, GitContext, PullRequestInfo};
 use crate::scroll_state::ScrollState;
 use crate::session::Session;
 use crate::tmux::Tmux;
+use ratatui::layout::Rect;
 
 // Re-export types that are part of the public API
 pub use mode::{
@@ -54,6 +55,8 @@ pub struct App {
     pub pr_info: Option<PullRequestInfo>,
     /// Scroll state for the session list
     pub scroll_state: ScrollState,
+    /// Area where the session list is rendered (set during render)
+    pub list_area: Option<Rect>,
 }
 
 impl App {
@@ -81,6 +84,7 @@ impl App {
             pending_action: None,
             pr_info: None,
             scroll_state: ScrollState::new(),
+            list_area: None,
         };
 
         app.update_preview();
