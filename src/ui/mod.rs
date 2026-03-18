@@ -39,6 +39,9 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     ])
     .split(area);
 
+    // Store the list area for mouse click handling
+    app.list_area = Some(layout[1]);
+
     render_header(frame, app, layout[0]);
     render_session_list(frame, app, layout[1]);
     render_preview(frame, app, layout[2]);
