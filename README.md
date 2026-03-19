@@ -111,10 +111,24 @@ View the screenshots at [GitHub](https://github.com/nielsgroen/claude-tmux).
 
 claude-tmux detects Claude Code status by analyzing pane content:
 
+### Primary Detection (Animation-based - more reliable)
+Claude displays animation indicators above the prompt when actively thinking:
+
 | Pattern | Status |
 |---------|--------|
-| Input prompt (`❯`) with border above + "ctrl+c to interrupt" | Working |
-| Input prompt (`❯`) with border above, no interrupt message | Idle |
+| `✶ Zigzagging…` (or `· Zigzagging…`) | Working |
+| `○ Spinning…` | Working |
+| `✻ Cogitated for Xm Ys` | Idle |
+
+The ellipsis (`…` or `...`) indicates in-progress work. When the ellipsis disappears, the status changes to Idle.
+
+### Fallback Detection (Legacy message-based)
+For older Claude Code versions or edge cases:
+
+| Pattern | Status |
+|---------|--------|
+| Contains `interrupt` or `esc to interrupt` near prompt | Working |
+| Prompt `❯` with border, no interrupt, no numbered choices | Idle |
 | Contains `[y/n]` or `[Y/n]` | Waiting for input |
 | Otherwise | Unknown |
 

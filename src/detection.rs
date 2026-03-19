@@ -99,29 +99,68 @@ fn has_numbered_options(lines: &[&str], start: usize, end: usize) -> bool {
     false
 }
 
+/// Check if content contains a working animation indicator above the prompt.
+/// Claude shows an animation line above the prompt while actively thinking.
+/// These lines typically describe an action ending in "ing" followed by an ellipsis.
+///
+/// Examples:
+/// - "✶ Zigzagging… (38s · ↓ 2.0k tokens)" - Working
+/// - "· Finagling…" - Working
+/// - "○ Spinning… (10s)" - Working
+/// - "✻ Cogitated for 2m 32s" - Idle (past tense, no ellipsis)
+fn has_working_indicator(lines: &[&str], prompt_idx: usize) -> bool {
+    // Search in lines above the prompt (including the border line)
+    // Check up to 20 lines above to find animation indicators
+    let start = prompt_idx.saturating_sub(20);
+    let search_range = &lines[start..prompt_idx];
+
+    for line in search_range {
+        let stripped = strip_ansi_codes(line);
+        let lower = stripped.to_lowercase();
+        // Look for "ing…" pattern (verb+ing ending with ellipsis).
+        // This is characteristic of animation status lines like:
+        // "Zigzagging…", "Finagling…", "Garnishing…", "Spinning…"
+        if lower.contains("ing…") || lower.contains("ing ...") {
+            return true;
+        }
+    }
+
+    false
+}
+
 pub fn detect_status(content: &str) -> ClaudeCodeStatus {
     let lines: Vec<&str> = content.lines().collect();
 
     // Primary: look for input field with border above (proper prompt)
     if let Some(i) = find_input_field_line(&lines) {
+        // Check for working indicator (ellipsis above prompt)
+        if has_working_indicator(&lines, i) {
+            return ClaudeCodeStatus::Working;
+        }
+
+        // Check if it's a prompt with numbered choices (waiting for input)
         let start = i.saturating_sub(2);
         let end = std::cmp::min(i + 20, lines.len().saturating_sub(1));
+
+        // Check for "interrupt" message (old method - fallback)
         let mut has_interrupt = false;
         for idx in start..=end {
             let line = lines[idx];
-            // Match full "interrupt" or truncated "esc to…"
-            if line.contains("interrupt") || line.contains("esc t") {
+            if line.contains("interrupt") || line.contains("esc to interrupt") || line.contains("esc t") {
                 has_interrupt = true;
                 break;
             }
         }
+
         if has_interrupt {
             return ClaudeCodeStatus::Working;
         }
-        // Check if it's a prompt with numbered choices (waiting for input)
+
         if has_numbered_options(&lines, start, end) {
             return ClaudeCodeStatus::WaitingInput;
         }
+
+        // No working indicator and no numbered choices = Idle (prompt ready for input)
         return ClaudeCodeStatus::Idle;
     }
 
@@ -269,5 +308,47 @@ mod tests {
         // Simulate colored numbered options with ANSI escape codes
         let content = "Do you want to proceed?\n\x1b[32m❯\x1b[0m \x1b[1;32m1.\x1b[0m Yes\n\x1b[1;32m2.\x1b[0m No\n\x1b[1;32m3.\x1b[0m Maybe";
         assert_eq!(detect_status(content), ClaudeCodeStatus::WaitingInput);
+    }
+
+    #[test]
+    fn test_working_with_zigzagging_animation() {
+        // Zigzagging with diamond symbol and ellipsis
+        let content = "✶ Zigzagging… (38s · ↓ 2.0k tokens)\n─────\n❯ ready";
+        assert_eq!(detect_status(content), ClaudeCodeStatus::Working);
+    }
+
+    #[test]
+    fn test_working_with_zigzagging_dot() {
+        // Zigzagging with middle dot symbol
+        let content = "· Zigzagging… (1m 14s · ↓ 3.5k tokens)\n─────\n❯ ready";
+        assert_eq!(detect_status(content), ClaudeCodeStatus::Working);
+    }
+
+    #[test]
+    fn test_working_with_truncated_zigzagging() {
+        // Zigzagging that might get truncated depending on screen width
+        let content = "Zigzagging… (38s · ↓ 2.0k)\n─────\n❯ ready";
+        assert_eq!(detect_status(content), ClaudeCodeStatus::Working);
+    }
+
+    #[test]
+    fn test_idle_with_cogitated() {
+        // Completed thinking with elapsed time (no ellipsis)
+        let content = "✻ Cogitated for 2m 32s\n─────\n❯ ready";
+        assert_eq!(detect_status(content), ClaudeCodeStatus::Idle);
+    }
+
+    #[test]
+    fn test_working_with_spinning() {
+        // Other possible animation types
+        let content = "○ Spinning… (10s)\n─────\n❯ ready";
+        assert_eq!(detect_status(content), ClaudeCodeStatus::Working);
+    }
+
+    #[test]
+    fn test_working_multiple_lines_above() {
+        // Working indicator several lines above prompt
+        let content = "✶ Zigzagging… (38s · ↓ 2.0k tokens)\n\n─────\n❯ ready";
+        assert_eq!(detect_status(content), ClaudeCodeStatus::Working);
     }
 }
