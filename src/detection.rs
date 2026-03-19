@@ -77,7 +77,18 @@ fn has_numbered_options(lines: &[&str], start: usize, end: usize) -> bool {
             continue;
         }
 
-        let mut chars = no_ansi.chars();
+        // Skip prompt marker '❯' if present at the start, then trim again
+        let content = if let Some(rest) = no_ansi.strip_prefix('❯') {
+            rest.trim_start()
+        } else {
+            &no_ansi
+        };
+
+        if content.is_empty() {
+            continue;
+        }
+
+        let mut chars = content.chars();
         let mut has_digit = false;
 
         while let Some(c) = chars.next() {
@@ -356,5 +367,19 @@ mod tests {
         // Longer verb with ellipsis at end (ellipsis appears after many chars)
         let content = "✽ Implementing separate app token cache fix…\n───────────────────────────────────────────────\n❯ ";
         assert_eq!(detect_status(content), ClaudeCodeStatus::Working);
+    }
+
+    #[test]
+    fn test_waiting_input_with_prompt_marker_on_same_line() {
+        // Your first example: prompt marker on same line as first option
+        let content = " Do you want to proceed?\n❯ 1. Yes\n  2. No\n\nEsc to cancel · Tab to amend · ctrl+e to explain";
+        assert_eq!(detect_status(content), ClaudeCodeStatus::WaitingInput);
+    }
+
+    #[test]
+    fn test_waiting_input_compound_command_example() {
+        // Your second example: compound command approval
+        let content = "──────────────────────────────────────────────────────\n Bash command\n\n   cd \"/Users/nathanmathis/src/xcode-projects/FroggyTV\" && git checkout HEAD --\n   FroggyTV/Services/IRCMessageHandler.swift\n   Restore IRCMessageHandler from git\n\n Compound commands with cd and git require approval\n to prevent bare repository attacks\n\n Do you want to proceed?\n❯ 1. Yes\n  2. No\n\n Esc to cancel · Tab to amend · ctrl+e to explain";
+        assert_eq!(detect_status(content), ClaudeCodeStatus::WaitingInput);
     }
 }

@@ -525,75 +525,102 @@ pub fn handle_mouse(app: &mut App, mouse: MouseEvent) {
         return;
     }
 
-    // Only handle left click press (not release or drag)
-    if let MouseEventKind::Down(button) = mouse.kind {
-        if button != MouseButton::Left {
-            return;
+    match mouse.kind {
+        MouseEventKind::ScrollUp => {
+            // Handle scroll up in list area
+            if let Some(list_area) = app.list_area {
+                let mouse_row = mouse.row as usize;
+                let list_y = list_area.y as usize;
+                let list_height = list_area.height as usize;
+
+                if mouse_row >= list_y && mouse_row < list_y + list_height {
+                    app.select_prev();
+                    app.update_preview();
+                }
+            }
         }
-    } else {
-        return;
-    }
+        MouseEventKind::ScrollDown => {
+            // Handle scroll down in list area
+            if let Some(list_area) = app.list_area {
+                let mouse_row = mouse.row as usize;
+                let list_y = list_area.y as usize;
+                let list_height = list_area.height as usize;
 
-    // First check: if click is in preview area, switch to selected session
-    if let Some(preview_area) = app.preview_area {
-        let mouse_row = mouse.row as usize;
-        let preview_y = preview_area.y as usize;
-        let preview_height = preview_area.height as usize;
-
-        if mouse_row >= preview_y && mouse_row < preview_y + preview_height {
-            // Click is in preview pane - switch to selected session
-            app.switch_to_selected();
-            return;
+                if mouse_row >= list_y && mouse_row < list_y + list_height {
+                    app.select_next();
+                    app.update_preview();
+                }
+            }
         }
+        MouseEventKind::Down(button) => {
+            // Only handle left click press (not release or drag)
+            if button != MouseButton::Left {
+                return;
+            }
+
+            // First check: if click is in preview area, switch to selected session
+            if let Some(preview_area) = app.preview_area {
+                let mouse_row = mouse.row as usize;
+                let preview_y = preview_area.y as usize;
+                let preview_height = preview_area.height as usize;
+
+                if mouse_row >= preview_y && mouse_row < preview_y + preview_height {
+                    // Click is in preview pane - switch to selected session
+                    app.switch_to_selected();
+                    return;
+                }
+            }
+
+            // Get the list area; if not set, ignore
+            let list_area = match app.list_area {
+                Some(area) => area,
+                None => return,
+            };
+
+            // Check if click Y coordinate is within list area
+            // crossterm uses row/col with row starting at 0
+            let mouse_row = mouse.row as usize;
+            let list_y = list_area.y as usize;
+            let list_height = list_area.height as usize;
+
+            if mouse_row < list_y || mouse_row >= list_y + list_height {
+                return; // Click outside list area
+            }
+
+            // Compute relative Y within list area
+            let relative_y = mouse_row - list_y;
+            let visible_index = relative_y;
+
+            // Get filtered sessions and check bounds
+            let filtered = app.filtered_sessions();
+            let filtered_len = filtered.len();
+            if visible_index >= filtered_len {
+                return; // Click on empty space below last item
+            }
+            let total_items = filtered_len;
+            // Drop filtered to release immutable borrow before mutating app
+            drop(filtered);
+
+            // Map visible index to actual index using scroll offset
+            let scroll_offset = app.scroll_state.offset();
+            let actual_index = scroll_offset + visible_index;
+
+            // Safety check: ensure actual_index is valid
+            if actual_index >= total_items {
+                return;
+            }
+
+            // Update selection
+            app.selected = actual_index;
+
+            // Adjust scroll to keep selected item visible (centered logic)
+            // Use the same scrolling logic as keyboard navigation
+            let visible_height = list_area.height as usize;
+            app.scroll_state.update(actual_index, total_items, visible_height);
+
+            // Update preview for new selection
+            app.update_preview();
+        }
+        _ => return,
     }
-
-    // Get the list area; if not set, ignore
-    let list_area = match app.list_area {
-        Some(area) => area,
-        None => return,
-    };
-
-    // Check if click Y coordinate is within list area
-    // crossterm uses row/col with row starting at 0
-    let mouse_row = mouse.row as usize;
-    let list_y = list_area.y as usize;
-    let list_height = list_area.height as usize;
-
-    if mouse_row < list_y || mouse_row >= list_y + list_height {
-        return; // Click outside list area
-    }
-
-    // Compute relative Y within list area
-    let relative_y = mouse_row - list_y;
-    let visible_index = relative_y;
-
-    // Get filtered sessions and check bounds
-    let filtered = app.filtered_sessions();
-    let filtered_len = filtered.len();
-    if visible_index >= filtered_len {
-        return; // Click on empty space below last item
-    }
-    let total_items = filtered_len;
-    // Drop filtered to release immutable borrow before mutating app
-    drop(filtered);
-
-    // Map visible index to actual index using scroll offset
-    let scroll_offset = app.scroll_state.offset();
-    let actual_index = scroll_offset + visible_index;
-
-    // Safety check: ensure actual_index is valid
-    if actual_index >= total_items {
-        return;
-    }
-
-    // Update selection
-    app.selected = actual_index;
-
-    // Adjust scroll to keep selected item visible (centered logic)
-    // Use the same scrolling logic as keyboard navigation
-    let visible_height = list_area.height as usize;
-    app.scroll_state.update(actual_index, total_items, visible_height);
-
-    // Update preview for new selection
-    app.update_preview();
 }
