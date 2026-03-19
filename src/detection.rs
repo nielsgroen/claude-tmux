@@ -117,10 +117,9 @@ fn has_working_indicator(lines: &[&str], prompt_idx: usize) -> bool {
     for line in search_range {
         let stripped = strip_ansi_codes(line);
         let lower = stripped.to_lowercase();
-        // Look for "ing…" pattern (verb+ing ending with ellipsis).
-        // This is characteristic of animation status lines like:
-        // "Zigzagging…", "Finagling…", "Garnishing…", "Spinning…"
-        if lower.contains("ing…") || lower.contains("ing ...") {
+        // Look for an "ing" substring (typical in verbs) AND the special ellipsis character (…).
+        // The ellipsis indicates the activity is still in progress.
+        if lower.contains("ing") && stripped.contains('…') {
             return true;
         }
     }
@@ -349,6 +348,13 @@ mod tests {
     fn test_working_multiple_lines_above() {
         // Working indicator several lines above prompt
         let content = "✶ Zigzagging… (38s · ↓ 2.0k tokens)\n\n─────\n❯ ready";
+        assert_eq!(detect_status(content), ClaudeCodeStatus::Working);
+    }
+
+    #[test]
+    fn test_working_with_implementing() {
+        // Longer verb with ellipsis at end (ellipsis appears after many chars)
+        let content = "✽ Implementing separate app token cache fix…\n───────────────────────────────────────────────\n❯ ";
         assert_eq!(detect_status(content), ClaudeCodeStatus::Working);
     }
 }
