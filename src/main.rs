@@ -56,6 +56,9 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
                 input::handle_key(&mut app, key);
             }
         }
+
+        // Refresh Claude status via content-change detection (self-throttled to 500 ms)
+        app.tick_status();
     }
 
     Ok(())

@@ -9,11 +9,15 @@
 mod helpers;
 mod mode;
 
+use std::collections::HashMap;
+use std::time::{Duration, Instant};
+
 use anyhow::Result;
 
+use crate::detection::{detect_static_status, detect_status};
 use crate::git::{self, GitContext, PullRequestInfo};
 use crate::scroll_state::ScrollState;
-use crate::session::Session;
+use crate::session::{ClaudeCodeStatus, Session};
 use crate::tmux::Tmux;
 
 // Re-export types that are part of the public API
@@ -54,6 +58,10 @@ pub struct App {
     pub pr_info: Option<PullRequestInfo>,
     /// Scroll state for the session list
     pub scroll_state: ScrollState,
+    /// Cache of last captured content per pane ID, used for content-change status detection
+    pane_content_cache: HashMap<String, String>,
+    /// Timestamp of the last status tick
+    last_status_tick: Instant,
 }
 
 impl App {
@@ -81,6 +89,8 @@ impl App {
             pending_action: None,
             pr_info: None,
             scroll_state: ScrollState::new(),
+            pane_content_cache: HashMap::new(),
+            last_status_tick: Instant::now(),
         };
 
         app.update_preview();
@@ -105,6 +115,46 @@ impl App {
         });
     }
 
+    /// Refresh Claude Code status for all panes using content-change detection.
+    ///
+    /// Called on every main-loop iteration but self-throttles to run at most
+    /// every 500 ms. Compares the current pane capture against the previous
+    /// one: if the content changed the session is Working; if it is the same
+    /// we fall back to static text inspection for Idle / WaitingInput / Unknown.
+    pub fn tick_status(&mut self) {
+        const STATUS_INTERVAL: Duration = Duration::from_millis(500);
+        if self.last_status_tick.elapsed() < STATUS_INTERVAL {
+            return;
+        }
+        self.last_status_tick = Instant::now();
+
+        // Collect (session_index, pane_id) first to satisfy the borrow checker.
+        let targets: Vec<(usize, String)> = self
+            .sessions
+            .iter()
+            .enumerate()
+            .filter_map(|(i, s)| s.claude_code_pane.as_ref().map(|id| (i, id.clone())))
+            .collect();
+
+        for (idx, pane_id) in targets {
+            let Ok(content) = Tmux::capture_pane(&pane_id, 15, true) else {
+                continue;
+            };
+
+            let status = match self.pane_content_cache.get(&pane_id) {
+                // Content changed since last tick → definitely working
+                Some(prev) if prev != &content => ClaudeCodeStatus::Working,
+                // Content unchanged → use static text check
+                Some(_) => detect_static_status(&content),
+                // No cached entry yet → fall back to full text detection
+                None => detect_status(&content),
+            };
+
+            self.sessions[idx].claude_code_status = status;
+            self.pane_content_cache.insert(pane_id, content);
+        }
+    }
+
     /// Clear any displayed messages
     pub fn clear_messages(&mut self) {
         self.error = None;
@@ -121,6 +171,7 @@ impl App {
 
     /// Refresh sessions without affecting messages (for use after git operations)
     fn refresh_sessions(&mut self) -> bool {
+        self.pane_content_cache.clear();
         match Tmux::list_sessions() {
             Ok(sessions) => {
                 self.sessions = sessions;
@@ -186,8 +237,8 @@ impl App {
     pub fn switch_to_selected(&mut self) {
         self.clear_messages();
         if let Some(session) = self.selected_session() {
-            let name = session.name.clone();
-            match Tmux::switch_to_session(&name) {
+            let target = session.switch_target();
+            match Tmux::switch_to_session(&target) {
                 Ok(_) => {
                     self.should_quit = true;
                 }
@@ -362,10 +413,11 @@ impl App {
             return;
         };
         let session_name = session.name.clone();
+        let switch_target = session.switch_target();
 
         match action {
             SessionAction::SwitchTo => {
-                match Tmux::switch_to_session(&session_name) {
+                match Tmux::switch_to_session(&switch_target) {
                     Ok(_) => self.should_quit = true,
                     Err(e) => self.error = Some(format!("Failed to switch: {}", e)),
                 }
