@@ -19,6 +19,15 @@ pub fn detect_status(content: &str) -> ClaudeCodeStatus {
     ClaudeCodeStatus::Unknown
 }
 
+/// Returns true if the content looks like an active Claude Code pane.
+///
+/// Used as a fallback when the pane's process name does not match "claude"
+/// (e.g. Claude Code sets its process title to its version number such as
+/// "2.1.110", which defeats command-name based detection).
+pub fn looks_like_claude_pane(content: &str) -> bool {
+    has_input_field(content)
+}
+
 /// Detect input field: prompt line (❯) with border directly above it.
 fn has_input_field(content: &str) -> bool {
     let lines: Vec<&str> = content.lines().collect();
@@ -70,5 +79,25 @@ mod tests {
     fn test_unknown() {
         let content = "random stuff";
         assert_eq!(detect_status(content), ClaudeCodeStatus::Unknown);
+    }
+
+    #[test]
+    fn test_looks_like_claude_pane() {
+        // Matches a pane with Claude Code's distinctive UI
+        let content = "● Done\n─────\n❯ hello";
+        assert!(looks_like_claude_pane(content));
+    }
+
+    #[test]
+    fn test_looks_like_claude_pane_with_status_lines() {
+        // Status/mode lines below the input box do not affect identification
+        let content = "● Done\n─────\n❯ hello\n─────\n  ~/repo | Sonnet 4.6\n  ►► auto mode on";
+        assert!(looks_like_claude_pane(content));
+    }
+
+    #[test]
+    fn test_not_claude_pane() {
+        let content = "regular terminal output";
+        assert!(!looks_like_claude_pane(content));
     }
 }

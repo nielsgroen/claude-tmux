@@ -3,7 +3,7 @@ use std::process::Command;
 
 use anyhow::{Context, Result};
 
-use crate::detection::detect_status;
+use crate::detection::{detect_status, looks_like_claude_pane};
 use crate::git::GitContext;
 use crate::session::{Pane, Session};
 
@@ -142,6 +142,22 @@ impl Tmux {
                     status,
                     Some(pane.current_path.clone()),
                 );
+            }
+        }
+
+        // Fallback: Claude Code sets its process title to its version number
+        // (e.g. "2.1.110") which defeats the command-name check above.
+        // Scan pane content for Claude Code's distinctive UI instead.
+        for pane in panes {
+            if let Ok(content) = Self::capture_pane(&pane.id, 15, true) {
+                if looks_like_claude_pane(&content) {
+                    let status = detect_status(&content);
+                    return (
+                        Some(pane.id.clone()),
+                        status,
+                        Some(pane.current_path.clone()),
+                    );
+                }
             }
         }
 
