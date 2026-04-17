@@ -94,8 +94,16 @@ impl Session {
         }
     }
 
-    /// Returns the tmux switch target: `name` or `name:window_index`.
+    /// Returns the tmux switch target.
+    ///
+    /// Prefers the claude pane id (e.g. `%42`) when known: tmux resolves a
+    /// pane-id target through the full session/window/pane hierarchy, so a
+    /// single `switch-client -t %42` lands the client on the exact pane.
+    /// Falls back to `name:window_index`, then to the bare session name.
     pub fn switch_target(&self) -> String {
+        if let Some(pane_id) = &self.claude_code_pane {
+            return pane_id.clone();
+        }
         match &self.target_window_index {
             Some(idx) => format!("{}:{}", self.name, idx),
             None => self.name.clone(),
