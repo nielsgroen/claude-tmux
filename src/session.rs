@@ -47,6 +47,10 @@ pub struct Pane {
     pub current_command: String,
     /// Current working directory
     pub current_path: PathBuf,
+    /// Window index this pane belongs to (e.g., "0", "1")
+    pub window_index: String,
+    /// Window name this pane belongs to
+    pub window_name: String,
 }
 
 /// A tmux session that may contain a Claude Code instance
@@ -69,11 +73,43 @@ pub struct Session {
     pub claude_code_pane: Option<String>,
     /// Status of Claude Code in this session
     pub claude_code_status: ClaudeCodeStatus,
+    /// Window label to show next to the session name, used when a session
+    /// has multiple claude panes and is shown as multiple rows.
+    pub window_label: Option<String>,
+    /// Window index to target when switching, if this row represents a
+    /// specific claude pane within a multi-pane session.
+    pub target_window_index: Option<String>,
     /// Git context, if the working directory is a git repository
     pub git_context: Option<GitContext>,
 }
 
 impl Session {
+    /// Returns the name to display in the session list. Includes a
+    /// `:window` suffix when this row represents a specific claude pane
+    /// within a session that has multiple claude instances.
+    pub fn display_name(&self) -> String {
+        match &self.window_label {
+            Some(label) => format!("{}:{}", self.name, label),
+            None => self.name.clone(),
+        }
+    }
+
+    /// Returns the tmux switch target.
+    ///
+    /// Prefers the claude pane id (e.g. `%42`) when known: tmux resolves a
+    /// pane-id target through the full session/window/pane hierarchy, so a
+    /// single `switch-client -t %42` lands the client on the exact pane.
+    /// Falls back to `name:window_index`, then to the bare session name.
+    pub fn switch_target(&self) -> String {
+        if let Some(pane_id) = &self.claude_code_pane {
+            return pane_id.clone();
+        }
+        match &self.target_window_index {
+            Some(idx) => format!("{}:{}", self.name, idx),
+            None => self.name.clone(),
+        }
+    }
+
     /// Returns a shortened version of the working directory for display
     pub fn display_path(&self) -> String {
         let path = &self.working_directory;

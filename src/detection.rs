@@ -1,17 +1,36 @@
 use crate::session::ClaudeCodeStatus;
 
-/// Detect Claude Code status from pane content.
-pub fn detect_status(content: &str) -> ClaudeCodeStatus {
-    // Step 1: Detect input field by its visual structure
+/// Detect Claude Code status when content has NOT changed since the last check.
+///
+/// Working is determined externally by content-change detection. This function
+/// only distinguishes Idle, WaitingInput, and Unknown from static content.
+pub fn detect_static_status(content: &str) -> ClaudeCodeStatus {
+    if content.contains("[y/n]") || content.contains("[Y/n]") {
+        return ClaudeCodeStatus::WaitingInput;
+    }
     if has_input_field(content) {
-        // Step 2: Check if interruptable
+        return ClaudeCodeStatus::Idle;
+    }
+    ClaudeCodeStatus::Unknown
+}
+
+/// Detect Claude Code status from pane content.
+///
+/// Used as a fallback when no previous capture is available for comparison.
+/// Prefer content-change detection (see `App::tick_status`) for reliable
+/// Working vs Idle discrimination.
+pub fn detect_status(content: &str) -> ClaudeCodeStatus {
+    if has_input_field(content) {
         if content.contains("ctrl+c") && content.contains("to interrupt") {
             return ClaudeCodeStatus::Working;
         }
         return ClaudeCodeStatus::Idle;
     }
 
-    // No input field - check for permission prompt
+    if content.contains("ctrl+c") && content.contains("to interrupt") {
+        return ClaudeCodeStatus::Working;
+    }
+
     if content.contains("[y/n]") || content.contains("[Y/n]") {
         return ClaudeCodeStatus::WaitingInput;
     }

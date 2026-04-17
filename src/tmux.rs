@@ -5,7 +5,7 @@ use anyhow::{Context, Result};
 
 use crate::detection::detect_status;
 use crate::git::GitContext;
-use crate::session::{Pane, Session};
+use crate::session::{ClaudeCodeStatus, Pane, Session};
 
 /// Wrapper for tmux command execution
 pub struct Tmux;
@@ -45,54 +45,94 @@ impl Tmux {
                 // Get panes for this session
                 let panes = Self::list_panes(&name).unwrap_or_default();
 
-                // Find Claude Code pane and detect status
-                let (claude_code_pane, claude_code_status, working_directory) =
-                    Self::find_claude_code_pane(&name, &panes);
+                // Find every pane running claude
+                let claude_panes: Vec<&Pane> = panes
+                    .iter()
+                    .filter(|p| p.current_command == "claude" || p.current_command.contains("claude"))
+                    .collect();
 
-                // Use the Claude Code pane's path, or fall back to first pane's path
-                let working_directory = working_directory.unwrap_or_else(|| {
-                    panes
+                // Emit one Session row per claude pane. Sessions with zero
+                // claude panes still produce a single row with no claude info.
+                let multi = claude_panes.len() > 1;
+
+                if claude_panes.is_empty() {
+                    let working_directory = panes
                         .first()
                         .map(|p| p.current_path.clone())
-                        .unwrap_or_default()
-                });
+                        .unwrap_or_default();
+                    let git_context = GitContext::detect(&working_directory);
 
-                // Detect git context for the working directory
-                let git_context = GitContext::detect(&working_directory);
+                    sessions.push(Session {
+                        name: name.clone(),
+                        created,
+                        attached,
+                        working_directory,
+                        window_count,
+                        panes: panes.clone(),
+                        claude_code_pane: None,
+                        claude_code_status: ClaudeCodeStatus::Unknown,
+                        window_label: None,
+                        target_window_index: None,
+                        git_context,
+                    });
+                } else {
+                    for claude_pane in claude_panes {
+                        let status = Self::capture_pane(&claude_pane.id, 15, true)
+                            .map(|content| detect_status(&content))
+                            .unwrap_or(ClaudeCodeStatus::Unknown);
 
-                sessions.push(Session {
-                    name,
-                    created,
-                    attached,
-                    working_directory,
-                    window_count,
-                    panes,
-                    claude_code_pane,
-                    claude_code_status,
-                    git_context,
-                });
+                        let working_directory = claude_pane.current_path.clone();
+                        let git_context = GitContext::detect(&working_directory);
+
+                        let (window_label, target_window_index) = if multi {
+                            (
+                                Some(claude_pane.window_name.clone()),
+                                Some(claude_pane.window_index.clone()),
+                            )
+                        } else {
+                            (None, None)
+                        };
+
+                        sessions.push(Session {
+                            name: name.clone(),
+                            created,
+                            attached,
+                            working_directory,
+                            window_count,
+                            panes: panes.clone(),
+                            claude_code_pane: Some(claude_pane.id.clone()),
+                            claude_code_status: status,
+                            window_label,
+                            target_window_index,
+                            git_context,
+                        });
+                    }
+                }
             }
         }
 
-        // Sort by attached status first, then by name
+        // Sort by attached status, then name, then window label so the rows
+        // for a multi-claude session stay grouped in a stable order.
         sessions.sort_by(|a, b| {
             b.attached
                 .cmp(&a.attached)
                 .then_with(|| a.name.cmp(&b.name))
+                .then_with(|| a.window_label.cmp(&b.window_label))
         });
 
         Ok(sessions)
     }
 
-    /// List all panes in a session
+    /// List all panes in a session, across every window
     fn list_panes(session: &str) -> Result<Vec<Pane>> {
         let output = Command::new("tmux")
             .args([
                 "list-panes",
+                "-s",
                 "-t",
                 session,
                 "-F",
-                "#{pane_id}\t#{pane_current_command}\t#{pane_current_path}",
+                "#{pane_id}\t#{pane_current_command}\t#{pane_current_path}\t#{window_index}\t#{window_name}",
             ])
             .output()
             .context("Failed to execute tmux list-panes")?;
@@ -106,46 +146,18 @@ impl Tmux {
 
         for line in stdout.lines() {
             let parts: Vec<&str> = line.split('\t').collect();
-            if parts.len() >= 3 {
+            if parts.len() >= 5 {
                 panes.push(Pane {
                     id: parts[0].to_string(),
                     current_command: parts[1].to_string(),
                     current_path: PathBuf::from(parts[2]),
+                    window_index: parts[3].to_string(),
+                    window_name: parts[4].to_string(),
                 });
             }
         }
 
         Ok(panes)
-    }
-
-    /// Find the pane running Claude Code and detect its status
-    fn find_claude_code_pane(
-        _session: &str,
-        panes: &[Pane],
-    ) -> (
-        Option<String>,
-        crate::session::ClaudeCodeStatus,
-        Option<PathBuf>,
-    ) {
-        use crate::session::ClaudeCodeStatus;
-
-        for pane in panes {
-            // Check if this pane is running claude
-            if pane.current_command == "claude" || pane.current_command.contains("claude") {
-                // Capture pane content to detect status (strip empty lines for detection)
-                let status = Self::capture_pane(&pane.id, 15, true)
-                    .map(|content| detect_status(&content))
-                    .unwrap_or(ClaudeCodeStatus::Unknown);
-
-                return (
-                    Some(pane.id.clone()),
-                    status,
-                    Some(pane.current_path.clone()),
-                );
-            }
-        }
-
-        (None, ClaudeCodeStatus::Unknown, None)
     }
 
     /// Capture the last N lines of a pane's content
