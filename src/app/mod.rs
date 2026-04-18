@@ -340,8 +340,8 @@ impl App {
                     actions.push(SessionAction::Pull);
                 }
 
-                // PR actions: upstream exists, gh available, GitHub remote, not on default branch
-                if git::is_gh_available() && git::is_github_remote(&working_dir) {
+                // PR actions: upstream exists, forge CLI (gh or glab) available, not on default branch
+                if git::available_forge(&working_dir).is_some() {
                     // Check if not on default branch
                     if let Some(default_branch) = git::get_default_branch(&working_dir) {
                         if git.branch != default_branch {
