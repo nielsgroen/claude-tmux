@@ -37,7 +37,7 @@ bind-key C-c display-popup -E -w 80 -h 30 "/path/to/claude-tmux"
 Reload your tmux configuration.
 Press `Ctrl-b, Ctrl-c` to open claude-tmux from any tmux session.
 
-To use pull requests, make sure you have `gh` installed.
+To use pull/merge requests, make sure you have `gh` (GitHub) or `glab` (GitLab) installed and authenticated. A project can only use one or the other — when both GitHub and GitLab remotes are configured, the first one listed by `git remote -v` wins.
 
 ### Tmux options
 

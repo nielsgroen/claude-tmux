@@ -1,12 +1,13 @@
-//! Git operations and GitHub CLI integration
+//! Git operations and forge CLI integration
 //!
-//! This module provides git functionality through libgit2 and GitHub CLI:
+//! This module provides git functionality through libgit2 and the `gh` /
+//! `glab` CLIs:
 //! - `GitContext`: Detects and caches git state for a working directory
-//! - `github`: GitHub CLI operations (PR management)
+//! - `forge`: GitHub/GitLab CLI operations (PR/MR management)
 //! - `operations`: Core git operations (push, pull, fetch, commit, stage)
 //! - `worktree`: Worktree and branch management
 
-mod github;
+mod forge;
 mod operations;
 mod worktree;
 
@@ -15,9 +16,9 @@ use std::path::{Path, PathBuf};
 use git2::{Repository, StatusOptions};
 
 // Re-export public API
-pub use github::{
-    close_pull_request, create_pull_request, get_default_branch, get_pull_request_info,
-    is_gh_available, is_github_remote, merge_pull_request, view_pull_request, PullRequestInfo,
+pub use forge::{
+    available_forge, close_pull_request, create_pull_request, get_default_branch,
+    get_pull_request_info, merge_pull_request, view_pull_request, PullRequestInfo,
 };
 
 /// Git context for a session's working directory
