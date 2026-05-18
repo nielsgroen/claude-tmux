@@ -166,9 +166,10 @@ fn render_session_list(frame: &mut Frame, app: &mut App, area: Rect) {
     }
 
     // Calculate column widths
-    let max_name_len = filtered
+    let display_names: Vec<String> = filtered.iter().map(|s| s.display_name()).collect();
+    let max_name_len = display_names
         .iter()
-        .map(|s| s.name.width())
+        .map(|n| n.as_str().width())
         .max()
         .unwrap_or(10)
         .max(10);
@@ -267,7 +268,7 @@ fn render_session_list(frame: &mut Frame, app: &mut App, area: Rect) {
         let mut line_spans = vec![
             Span::raw(format!(" {} ", marker)),
             Span::styled(
-                format!("{:<width$}", session.name, width = max_name_len),
+                format!("{:<width$}", display_names[i], width = max_name_len),
                 name_style,
             ),
             Span::raw("  "),
