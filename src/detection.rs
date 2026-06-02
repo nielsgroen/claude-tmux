@@ -1,5 +1,20 @@
 use crate::session::ClaudeCodeStatus;
 
+/// Return content up to and including the input prompt boundary (❯ line with
+/// ─ border above it), stripping any status bar lines below. If no prompt
+/// boundary is found, return the full content unchanged. This works regardless
+/// of whether the user has 0, 1, 2, or more status bar lines.
+pub fn content_above_status_bar(content: &str) -> &str {
+    let lines: Vec<&str> = content.lines().collect();
+    for i in (0..lines.len()).rev() {
+        if lines[i].contains('❯') && i > 0 && lines[i - 1].contains('─') {
+            let end = lines[..=i].iter().map(|l| l.len() + 1).sum::<usize>() - 1;
+            return &content[..end];
+        }
+    }
+    content
+}
+
 /// Detect Claude Code status when content has NOT changed since the last check.
 ///
 /// Working is determined externally by content-change detection. This function
@@ -89,5 +104,29 @@ mod tests {
     fn test_unknown() {
         let content = "random stuff";
         assert_eq!(detect_status(content), ClaudeCodeStatus::Unknown);
+    }
+
+    #[test]
+    fn test_content_above_status_bar_two_line_bar() {
+        let content = "some output\n─────\n❯ hello\nINS | ~/project | Opus 4.6\n(◠‿◠) 0% | $0.00 | 10m 43s";
+        assert_eq!(content_above_status_bar(content), "some output\n─────\n❯ hello");
+    }
+
+    #[test]
+    fn test_content_above_status_bar_one_line_bar() {
+        let content = "some output\n─────\n❯ hello\nstatus: idle";
+        assert_eq!(content_above_status_bar(content), "some output\n─────\n❯ hello");
+    }
+
+    #[test]
+    fn test_content_above_status_bar_no_bar() {
+        let content = "some output\n─────\n❯ hello";
+        assert_eq!(content_above_status_bar(content), "some output\n─────\n❯ hello");
+    }
+
+    #[test]
+    fn test_content_above_status_bar_no_prompt() {
+        let content = "random stuff\nno prompt here";
+        assert_eq!(content_above_status_bar(content), "random stuff\nno prompt here");
     }
 }

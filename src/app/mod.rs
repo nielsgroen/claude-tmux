@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 
-use crate::detection::{detect_static_status, detect_status};
+use crate::detection::{content_above_status_bar, detect_static_status, detect_status};
 use crate::git::{self, GitContext, PullRequestInfo};
 use crate::scroll_state::ScrollState;
 use crate::session::{ClaudeCodeStatus, Session};
@@ -141,12 +141,10 @@ impl App {
                 continue;
             };
 
+            let comparable = content_above_status_bar(&content);
             let status = match self.pane_content_cache.get(&pane_id) {
-                // Content changed since last tick → definitely working
-                Some(prev) if prev != &content => ClaudeCodeStatus::Working,
-                // Content unchanged → use static text check
+                Some(prev) if content_above_status_bar(prev) != comparable => ClaudeCodeStatus::Working,
                 Some(_) => detect_static_status(&content),
-                // No cached entry yet → fall back to full text detection
                 None => detect_status(&content),
             };
 
