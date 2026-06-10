@@ -45,11 +45,26 @@ impl Tmux {
                 // Get panes for this session
                 let panes = Self::list_panes(&name).unwrap_or_default();
 
-                // Find every pane running claude
-                let claude_panes: Vec<&Pane> = panes
-                    .iter()
-                    .filter(|p| p.current_command == "claude" || p.current_command.contains("claude"))
-                    .collect();
+                // Find every pane running claude.
+                //
+                // Prefer matching by command name, but recent Claude Code
+                // versions set their process title to the version string
+                // (e.g. "2.1.169"), so `pane_current_command` no longer
+                // contains "claude". Fall back to recognizing the Claude UI in
+                // the pane content. Capture once here and reuse the content for
+                // status detection below to avoid a second capture-pane call.
+                let mut claude_panes: Vec<(&Pane, Option<String>)> = Vec::new();
+                for p in &panes {
+                    if p.current_command == "claude" || p.current_command.contains("claude") {
+                        claude_panes.push((p, None));
+                        continue;
+                    }
+                    if let Ok(content) = Self::capture_pane(&p.id, 15, true) {
+                        if crate::detection::looks_like_claude(&content) {
+                            claude_panes.push((p, Some(content)));
+                        }
+                    }
+                }
 
                 // Emit one Session row per claude pane. Sessions with zero
                 // claude panes still produce a single row with no claude info.
@@ -76,10 +91,15 @@ impl Tmux {
                         git_context,
                     });
                 } else {
-                    for claude_pane in claude_panes {
-                        let status = Self::capture_pane(&claude_pane.id, 15, true)
-                            .map(|content| detect_status(&content))
-                            .unwrap_or(ClaudeCodeStatus::Unknown);
+                    for (claude_pane, captured) in claude_panes {
+                        // Reuse content captured during identification when
+                        // available; otherwise capture now (name-matched panes).
+                        let status = match captured {
+                            Some(content) => detect_status(&content),
+                            None => Self::capture_pane(&claude_pane.id, 15, true)
+                                .map(|content| detect_status(&content))
+                                .unwrap_or(ClaudeCodeStatus::Unknown),
+                        };
 
                         let working_directory = claude_pane.current_path.clone();
                         let git_context = GitContext::detect(&working_directory);

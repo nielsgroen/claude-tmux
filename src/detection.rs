@@ -38,6 +38,22 @@ pub fn detect_status(content: &str) -> ClaudeCodeStatus {
     ClaudeCodeStatus::Unknown
 }
 
+/// Heuristically decide whether a pane is running Claude Code based on its
+/// content, independent of `pane_current_command`.
+///
+/// Recent Claude Code versions set their process title to the version string
+/// (e.g. "2.1.169"), so tmux's `pane_current_command` no longer contains
+/// "claude". Matching by name therefore misses every modern session. We fall
+/// back to recognizing the Claude UI: the input field (a `❯` prompt with a
+/// border directly above), the "ctrl+c to interrupt" working message, or a
+/// `[y/n]` permission prompt.
+pub fn looks_like_claude(content: &str) -> bool {
+    has_input_field(content)
+        || (content.contains("ctrl+c") && content.contains("to interrupt"))
+        || content.contains("[y/n]")
+        || content.contains("[Y/n]")
+}
+
 /// Detect input field: prompt line (❯) with border directly above it.
 fn has_input_field(content: &str) -> bool {
     let lines: Vec<&str> = content.lines().collect();
@@ -89,5 +105,30 @@ mod tests {
     fn test_unknown() {
         let content = "random stuff";
         assert_eq!(detect_status(content), ClaudeCodeStatus::Unknown);
+    }
+
+    #[test]
+    fn test_looks_like_claude_input_field() {
+        // Idle Claude UI: border directly above the prompt.
+        let content = "※ recap: did a thing\n─────\n❯ \n─────";
+        assert!(looks_like_claude(content));
+    }
+
+    #[test]
+    fn test_looks_like_claude_working() {
+        let content = "* Brewing… (ctrl+c to interrupt)";
+        assert!(looks_like_claude(content));
+    }
+
+    #[test]
+    fn test_looks_like_claude_permission_prompt() {
+        let content = "Delete files? [y/n]";
+        assert!(looks_like_claude(content));
+    }
+
+    #[test]
+    fn test_looks_like_claude_rejects_plain_shell() {
+        let content = "josec@host ~ % ls\nfoo bar baz";
+        assert!(!looks_like_claude(content));
     }
 }
