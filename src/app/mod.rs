@@ -19,6 +19,7 @@ use crate::git::{self, GitContext, PullRequestInfo};
 use crate::scroll_state::ScrollState;
 use crate::session::{ClaudeCodeStatus, Session};
 use crate::tmux::Tmux;
+use ratatui::layout::Rect;
 
 // Re-export types that are part of the public API
 pub use mode::{
@@ -62,6 +63,10 @@ pub struct App {
     pane_content_cache: HashMap<String, String>,
     /// Timestamp of the last status tick
     last_status_tick: Instant,
+    /// Area where the session list is rendered (set during render)
+    pub list_area: Option<Rect>,
+    /// Area where the preview pane is rendered (set during render)
+    pub preview_area: Option<Rect>,
 }
 
 impl App {
@@ -91,6 +96,8 @@ impl App {
             scroll_state: ScrollState::new(),
             pane_content_cache: HashMap::new(),
             last_status_tick: Instant::now(),
+            list_area: None,
+            preview_area: None,
         };
 
         app.update_preview();

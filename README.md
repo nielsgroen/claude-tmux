@@ -49,11 +49,12 @@ Options:
 
 - **Session Overview** — See all tmux sessions at a glance with Claude Code status indicators
 - **Status Detection** — Know whether each Claude Code instance is idle, working, or waiting for input
-- **Quick Switching** — Jump to any session with minimal keystrokes
+- **Quick Switching** — Jump to any session with minimal keystrokes or mouse clicks
 - **Live Preview** — See the last lines of the selected session's Claude Code pane with full ANSI color support
 - **Session Management** — Create, kill, and rename sessions without leaving the TUI
 - **Expandable Details** — View metadata like window count, pane commands, uptime, and attachment status
 - **Fuzzy Filtering** — Quickly filter sessions by name or path
+- **Mouse Support** — Click on session list items to select them, or click the preview pane to switch to the selected session
 
 ## Screenshots
 
@@ -98,6 +99,13 @@ View the screenshots at [GitHub](https://github.com/nielsgroen/claude-tmux).
 |-----|--------|
 | `?` | Show help |
 | `q` / `Esc` | Quit |
+
+### Mouse
+
+| Action | Result |
+|--------|--------|
+| Left-click on session item | Select/highlight the session |
+| Left-click on preview pane | Switch to the selected session |
 
 ## Status Detection
 

@@ -12,7 +12,7 @@ use std::io::{self, stdout};
 
 use anyhow::Result;
 use crossterm::{
-    event::{self, Event},
+    event::{self, Event, DisableMouseCapture, EnableMouseCapture},
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
     ExecutableCommand,
 };
@@ -24,6 +24,7 @@ fn main() -> Result<()> {
     // Set up terminal
     enable_raw_mode()?;
     stdout().execute(EnterAlternateScreen)?;
+    stdout().execute(EnableMouseCapture)?;
 
     let backend = CrosstermBackend::new(stdout());
     let mut terminal = Terminal::new(backend)?;
@@ -32,6 +33,7 @@ fn main() -> Result<()> {
     let result = run(&mut terminal);
 
     // Restore terminal
+    stdout().execute(DisableMouseCapture)?;
     disable_raw_mode()?;
     stdout().execute(LeaveAlternateScreen)?;
 
@@ -52,8 +54,10 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
 
         // Handle events
         if event::poll(std::time::Duration::from_millis(100))? {
-            if let Event::Key(key) = event::read()? {
-                input::handle_key(&mut app, key);
+            match event::read()? {
+                Event::Key(key) => input::handle_key(&mut app, key),
+                Event::Mouse(mouse) => input::handle_mouse(&mut app, mouse),
+                _ => {} // ignore other events (Resize, etc.)
             }
         }
 
