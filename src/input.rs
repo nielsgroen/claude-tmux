@@ -1,4 +1,4 @@
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind, MouseButton};
 
 use crate::app::{App, CreatePullRequestField, Mode, NewSessionField, NewWorktreeField};
 
@@ -513,6 +513,57 @@ fn handle_help_mode(app: &mut App, key: KeyEvent) {
     match key.code {
         KeyCode::Char('q') | KeyCode::Esc | KeyCode::Char('?') => {
             app.cancel();
+        }
+        _ => {}
+    }
+}
+
+/// Handle a mouse event and update the application state
+pub fn handle_mouse(app: &mut App, mouse: MouseEvent) {
+    // Mouse interaction is only meaningful in the normal session list view
+    if !matches!(app.mode, Mode::Normal) {
+        return;
+    }
+
+    let row_in = |area: ratatui::layout::Rect| {
+        mouse.row >= area.y && mouse.row < area.y + area.height
+    };
+
+    match mouse.kind {
+        MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
+            if app.list_area.is_some_and(row_in) {
+                if mouse.kind == MouseEventKind::ScrollUp {
+                    app.select_prev();
+                } else {
+                    app.select_next();
+                }
+                app.update_preview();
+            }
+        }
+        MouseEventKind::Down(MouseButton::Left) => {
+            // Clicking the preview pane switches to the selected session
+            if app.preview_area.is_some_and(row_in) {
+                app.switch_to_selected();
+                return;
+            }
+
+            let list_area = match app.list_area {
+                Some(area) if row_in(area) => area,
+                _ => return,
+            };
+
+            // Map the clicked row to a session, accounting for scroll offset
+            let visible_index = (mouse.row - list_area.y) as usize;
+            let total_items = app.filtered_sessions().len();
+            let actual_index = app.scroll_state.offset() + visible_index;
+            if actual_index >= total_items {
+                return; // click below the last item
+            }
+
+            app.selected = actual_index;
+            app.scroll_state
+                .update(actual_index, total_items, list_area.height as usize);
+            app.update_preview();
         }
         _ => {}
     }

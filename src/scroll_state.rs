@@ -25,6 +25,11 @@ impl ScrollState {
         }
     }
 
+    /// Get the current scroll offset (the index of the first visible item)
+    pub fn offset(&self) -> usize {
+        self.list_state.offset()
+    }
+
     /// Update the scroll state given the current selection and list dimensions.
     ///
     /// Returns a mutable reference to the underlying ListState for rendering.
