@@ -58,6 +58,8 @@ pub struct App {
     pub pr_info: Option<PullRequestInfo>,
     /// Scroll state for the session list
     pub scroll_state: ScrollState,
+    /// Preview pane height as a percentage of available space (from --preview-percent)
+    pub preview_percent: u16,
     /// Cache of last captured content per pane ID, used for content-change status detection
     pane_content_cache: HashMap<String, String>,
     /// Timestamp of the last status tick
@@ -70,7 +72,7 @@ impl App {
     // =========================================================================
 
     /// Create a new App instance
-    pub fn new() -> Result<Self> {
+    pub fn new(preview_percent: u16) -> Result<Self> {
         let sessions = Tmux::list_sessions()?;
         let current_session = Tmux::current_session()?;
 
@@ -89,6 +91,7 @@ impl App {
             pending_action: None,
             pr_info: None,
             scroll_state: ScrollState::new(),
+            preview_percent,
             pane_content_cache: HashMap::new(),
             last_status_tick: Instant::now(),
         };
@@ -99,7 +102,10 @@ impl App {
 
     /// Update the preview content for the currently selected session
     pub fn update_preview(&mut self) {
-        const PREVIEW_LINES: usize = 15;
+        // Capture generously: render_preview() shows only the last lines that fit
+        // the (percentage-sized) pane, so this just needs to exceed the largest
+        // possible pane height. capture-pane is bounded by the source pane anyway.
+        const PREVIEW_LINES: usize = 200;
 
         let pane_id = self.selected_session().and_then(|session| {
             // Prefer Claude pane, fall back to first pane
