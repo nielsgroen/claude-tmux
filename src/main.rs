@@ -20,6 +20,27 @@ use ratatui::prelude::*;
 
 use crate::app::App;
 
+/// Parse `--preview-percent <N>` (or `--preview-percent=<N>`) from the CLI.
+/// Controls the preview pane height as a percentage of available space.
+/// Defaults to 50; unparseable/out-of-range values clamp to 10..=100.
+fn preview_percent_from_args() -> u16 {
+    const DEFAULT: u16 = 50;
+    let mut args = std::env::args().skip(1);
+    while let Some(arg) = args.next() {
+        let value = if let Some(v) = arg.strip_prefix("--preview-percent=") {
+            Some(v.to_string())
+        } else if arg == "--preview-percent" {
+            args.next()
+        } else {
+            None
+        };
+        if let Some(v) = value {
+            return v.parse::<u16>().unwrap_or(DEFAULT).clamp(10, 100);
+        }
+    }
+    DEFAULT
+}
+
 fn main() -> Result<()> {
     // Set up terminal
     enable_raw_mode()?;
@@ -39,7 +60,7 @@ fn main() -> Result<()> {
 }
 
 fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
-    let mut app = App::new()?;
+    let mut app = App::new(preview_percent_from_args())?;
 
     loop {
         // Draw the UI

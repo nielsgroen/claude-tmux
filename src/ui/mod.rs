@@ -25,9 +25,11 @@ use crate::session::ClaudeCodeStatus;
 pub fn render(frame: &mut Frame, app: &mut App) {
     let area = frame.area();
 
-    // Calculate preview height (roughly 50% of available space, min 8, max 20 lines)
+    // Preview pane height = configured percentage of available space (min 3 rows,
+    // never more than what's available). Percentage comes from --preview-percent.
     let available_height = area.height.saturating_sub(4); // minus header, status, footer
-    let preview_height = (available_height * 50 / 100).clamp(8, 20);
+    let preview_height = ((available_height as u32 * app.preview_percent as u32 / 100) as u16)
+        .clamp(3, available_height.max(3));
 
     // Main layout: header, session list, preview, status bar, footer
     let layout = Layout::vertical([
