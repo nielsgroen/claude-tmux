@@ -1,6 +1,6 @@
 //! Git operations and GitHub CLI integration
 //!
-//! This module provides git functionality through libgit2 and GitHub CLI:
+//! This module provides git functionality through libgit2, the git CLI and GitHub CLI:
 //! - `GitContext`: Detects and caches git state for a working directory
 //! - `github`: GitHub CLI operations (PR management)
 //! - `operations`: Core git operations (push, pull, fetch, commit, stage)
@@ -11,8 +11,9 @@ mod operations;
 mod worktree;
 
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
-use git2::{Repository, StatusOptions};
+use git2::Repository;
 
 // Re-export public API
 pub use github::{
@@ -49,6 +50,11 @@ impl GitContext {
         self.has_staged || self.has_unstaged
     }
 
+    /// Working tree root of the repo containing `path`. None if not in a non-bare repo.
+    pub fn repo_root(path: &Path) -> Option<PathBuf> {
+        Repository::discover(path).ok()?.workdir().map(Path::to_path_buf)
+    }
+
     /// Detect git context for a given path. Returns None if not a git repo.
     pub fn detect(path: &Path) -> Option<Self> {
         let repo = Repository::discover(path).ok()?;
@@ -73,43 +79,9 @@ impl GitContext {
             Err(_) => "HEAD".to_string(), // Empty repo or other edge case
         };
 
-        // Check staged/unstaged state
-        let mut status_opts = StatusOptions::new();
-        status_opts
-            .include_untracked(true)
-            .include_ignored(false)
-            .exclude_submodules(true);
-
         let (has_staged, has_unstaged) = repo
-            .statuses(Some(&mut status_opts))
-            .map(|statuses| {
-                let mut staged = false;
-                let mut unstaged = false;
-                for entry in statuses.iter() {
-                    let s = entry.status();
-                    // Index (staged) changes
-                    if s.intersects(
-                        git2::Status::INDEX_NEW
-                            | git2::Status::INDEX_MODIFIED
-                            | git2::Status::INDEX_DELETED
-                            | git2::Status::INDEX_RENAMED
-                            | git2::Status::INDEX_TYPECHANGE,
-                    ) {
-                        staged = true;
-                    }
-                    // Worktree (unstaged) changes
-                    if s.intersects(
-                        git2::Status::WT_NEW
-                            | git2::Status::WT_MODIFIED
-                            | git2::Status::WT_DELETED
-                            | git2::Status::WT_RENAMED
-                            | git2::Status::WT_TYPECHANGE,
-                    ) {
-                        unstaged = true;
-                    }
-                }
-                (staged, unstaged)
-            })
+            .workdir()
+            .and_then(detect_changes)
             .unwrap_or((false, false));
 
         // Check if worktree
@@ -138,6 +110,34 @@ impl GitContext {
             behind,
         })
     }
+}
+
+/// Get (has_staged, has_unstaged) from `git status`, skipping ignored and excluded paths.
+fn detect_changes(workdir: &Path) -> Option<(bool, bool)> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(workdir)
+        .args(["status", "--porcelain=v1", "-unormal", "--ignore-submodules=all"])
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+
+    let mut staged = false;
+    let mut unstaged = false;
+    for line in String::from_utf8_lossy(&output.stdout).lines() {
+        let mut xy = line.chars();
+        let (x, y) = (xy.next()?, xy.next()?);
+        if x == '?' {
+            unstaged = true;
+            continue;
+        }
+        staged |= "MADRCT".contains(x);
+        unstaged |= "MDTRC".contains(y);
+    }
+    Some((staged, unstaged))
 }
 
 /// Get upstream info: (has_upstream, ahead, behind)

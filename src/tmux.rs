@@ -1,4 +1,5 @@
-use std::path::PathBuf;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context, Result};
@@ -34,6 +35,16 @@ impl Tmux {
         let stdout = String::from_utf8_lossy(&output.stdout);
         let mut sessions = Vec::new();
 
+        // One GitContext per repo root; sessions often share a repo.
+        let mut git_cache: HashMap<PathBuf, Option<GitContext>> = HashMap::new();
+        let mut git_context_for = |path: &Path| {
+            let root = GitContext::repo_root(path)?;
+            git_cache
+                .entry(root)
+                .or_insert_with_key(|root| GitContext::detect(root))
+                .clone()
+        };
+
         for line in stdout.lines() {
             let parts: Vec<&str> = line.split('\t').collect();
             if parts.len() >= 4 {
@@ -60,7 +71,7 @@ impl Tmux {
                         .first()
                         .map(|p| p.current_path.clone())
                         .unwrap_or_default();
-                    let git_context = GitContext::detect(&working_directory);
+                    let git_context = git_context_for(&working_directory);
 
                     sessions.push(Session {
                         name: name.clone(),
@@ -82,7 +93,7 @@ impl Tmux {
                             .unwrap_or(ClaudeCodeStatus::Unknown);
 
                         let working_directory = claude_pane.current_path.clone();
-                        let git_context = GitContext::detect(&working_directory);
+                        let git_context = git_context_for(&working_directory);
 
                         let (window_label, target_window_index) = if multi {
                             (
